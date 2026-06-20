@@ -1,0 +1,6 @@
+src/**
+tests/**
+node_modules/**
+.ext-graph/**
+tsconfig.json
+vitest.config.ts

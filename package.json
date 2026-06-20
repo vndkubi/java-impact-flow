@@ -1,0 +1,100 @@
+{
+  "name": "java-impact-flow",
+  "displayName": "Java Impact Flow",
+  "description": "Visualize Java field, method, callback, API-flow impact, and suggested tests in VS Code.",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/extension.js",
+  "bin": {
+    "java-impact-flow": "./dist/cli.js",
+    "ext-graph": "./dist/cli.js"
+  },
+  "engines": {
+    "vscode": "^1.90.0",
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "build": "tsc -p .",
+    "lint": "tsc --noEmit -p .",
+    "demo": "node dist/cli.js",
+    "test": "vitest run"
+  },
+  "activationEvents": [
+    "onCommand:extGraph.showImpactGraph",
+    "onCommand:extGraph.exportImpactGraph"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "extGraph.showImpactGraph",
+        "title": "Java Impact Flow: Show Impact View",
+        "category": "Java Impact Flow"
+      },
+      {
+        "command": "extGraph.exportImpactGraph",
+        "title": "Java Impact Flow: Export Impact Report",
+        "category": "Java Impact Flow"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "extGraph.showImpactGraph",
+          "when": "resourceLangId == java",
+          "group": "navigation@30"
+        },
+        {
+          "command": "extGraph.exportImpactGraph",
+          "when": "resourceLangId == java",
+          "group": "navigation@31"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Java Impact Flow",
+      "properties": {
+        "extGraph.maxFiles": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "description": "Maximum Java files scanned by the static fallback graph builder. Use 0 for full project scan up to the 100000-file safety cap."
+        },
+        "extGraph.maxFileBytes": {
+          "type": "number",
+          "default": 300000,
+          "minimum": 1000,
+          "description": "Maximum bytes read from a single Java file."
+        },
+        "extGraph.includeTests": {
+          "type": "boolean",
+          "default": true,
+          "description": "Include Java test files as impact graph evidence."
+        },
+        "extGraph.maxDepth": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "description": "Maximum recursive method/callback depth for endpoint flow traces. Use 0 for full depth up to the 20-level safety cap."
+        }
+      }
+    }
+  },
+  "keywords": [
+    "vscode",
+    "java",
+    "api-flow",
+    "suggested-tests",
+    "impact-graph",
+    "blast-radius",
+    "call-hierarchy",
+    "references"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.17.0",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}
