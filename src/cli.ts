@@ -62,6 +62,7 @@ async function main(): Promise<void> {
     root: graph.metadata.root,
     mode: graph.metadata.mode,
     analyzer: graph.metadata.analyzer,
+    trust: graph.metadata.trust,
     summary: graph.summary,
     nodes: graph.nodes.length,
     edges: graph.edges.length,

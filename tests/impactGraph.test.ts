@@ -60,6 +60,9 @@ class OrderServiceTest {
     expect(graph.metadata.fileLimit).toBe(100000);
     expect(graph.flows[0]?.maxDepth).toBe(20);
     expect(graph.metadata.buildSystem).toEqual({ tool: 'gradle', wrapper: 'gradlew.bat' });
+    expect(graph.metadata.trust.level).toMatch(/high|medium|low/);
+    expect(graph.metadata.trust.score).toBeGreaterThan(0);
+    expect(graph.metadata.trust.reasons.join(' ')).toContain('Static regex analyzer');
     expect(graph.flows[0]?.mermaid).toContain('sequenceDiagram');
     expect(graph.nodes.some(node => node.kind === 'endpoint')).toBe(true);
     expect(graph.edges.some(edge => edge.kind === 'call')).toBe(true);
@@ -123,7 +126,13 @@ class UserListingPage {}
     expect(html).toContain("type: 'openLocation'");
     expect(html).toContain('open-hint');
     expect(html).toContain('Suggested Tests');
+    expect(html).toContain('Trust Score');
+    expect(html).toContain('trust-card');
+    expect(html).toContain('renderTrust');
+    expect(html).toContain("type: 'publishDiagnostics'");
     expect(html).toContain('copy-test-command');
+    expect(html).toContain('data-run-test-command');
+    expect(html).toContain("type: 'runTestCommand'");
     expect(html).toContain('testCommandForFile');
     expect(html).toContain("type: 'copyText'");
     expect(html).toContain('mapFilterBanner');

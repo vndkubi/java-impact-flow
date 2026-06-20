@@ -23,8 +23,14 @@ Java index.
 - Impact map grouped by entrypoints, production files, tests, callbacks, and
   framework annotations.
 - Suggested test files ranked from matching evidence.
-- Copyable Gradle/Maven test commands when a build wrapper is detected.
+- Runnable and copyable Gradle/Maven test commands when a build wrapper is detected.
 - Exportable JSON and standalone HTML reports.
+- A trust score that explains whether a static report is high, medium, or low
+  confidence.
+- A VS Code command that detects changed Java symbols from the current Git diff
+  and opens a patch-impact report.
+- Inline CodeLens impact counts on Java classes and methods.
+- Opt-in Problems diagnostics for low-confidence unresolved flow steps.
 
 ## Requirements
 
@@ -55,10 +61,12 @@ passing.
 5. Open a Java file, place the cursor on a class, method, or field, then run:
    `Java Impact Flow: Show Impact View`.
 6. Pick a mode such as `api-flow` or `patch-impact`.
+7. To inspect the current patch instead of typing a target, run:
+   `Java Impact Flow: Analyze Current Changes`.
 
 The webview opens beside the editor. Reference rows include an `Open` action
-that jumps back to the source line. Suggested tests include a copyable command
-such as:
+that jumps back to the source line. Suggested tests include `Run`, `Copy`, and
+`Run Top 3` actions for commands such as:
 
 ```powershell
 .\gradlew.bat :backend:test --tests "com.odde.doughnut.controllers.NotebookSharingGroupControllerTest"
@@ -101,6 +109,17 @@ java-impact-flow --root D:\Personal\Projects\doughnut --target BazaarNotebook --
 | `api-flow` | The target is a controller/resource or endpoint-related class. | Sequence |
 | `patch-impact` | You want a blast-radius view before editing a symbol. | Map + Suggested Tests |
 
+`Java Impact Flow: Analyze Current Changes` uses Git status and diff hunks to
+infer changed Java classes or methods, then opens `patch-impact` for the selected
+changed symbol.
+
+Inline CodeLens entries are shown on Java class and method declarations with
+counts such as `Impact: 3 endpoints | 7 tests | 12 refs`. Clicking the CodeLens
+opens the corresponding patch-impact view.
+
+The Trust Score panel includes `Publish Diagnostics`, which adds low-confidence
+unresolved call/callback steps to the VS Code Problems panel on demand.
+
 ## Configuration
 
 These settings are available under `Java Impact Flow` in VS Code settings.
@@ -111,6 +130,8 @@ These settings are available under `Java Impact Flow` in VS Code settings.
 | `extGraph.maxFileBytes` | `300000` | Maximum bytes read from a single Java file. |
 | `extGraph.includeTests` | `true` | Include Java test files as impact evidence. |
 | `extGraph.maxDepth` | `0` | Maximum recursive method/callback depth for endpoint flow traces. `0` traces full depth up to the `20`-level safety cap. |
+| `extGraph.enableCodeLens` | `true` | Show inline Java Impact Flow CodeLens entries on Java classes and methods. |
+| `extGraph.codeLensMaxSymbols` | `6` | Maximum Java classes or methods per file that receive impact-count CodeLens entries. |
 
 The setting prefix remains `extGraph` for compatibility with the current
 prototype command IDs.

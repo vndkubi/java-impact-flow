@@ -27,14 +27,21 @@
     "test": "vitest run"
   },
   "activationEvents": [
+    "onLanguage:java",
     "onCommand:extGraph.showImpactGraph",
-    "onCommand:extGraph.exportImpactGraph"
+    "onCommand:extGraph.exportImpactGraph",
+    "onCommand:extGraph.analyzeCurrentChanges"
   ],
   "contributes": {
     "commands": [
       {
         "command": "extGraph.showImpactGraph",
         "title": "Java Impact Flow: Show Impact View",
+        "category": "Java Impact Flow"
+      },
+      {
+        "command": "extGraph.analyzeCurrentChanges",
+        "title": "Java Impact Flow: Analyze Current Changes",
         "category": "Java Impact Flow"
       },
       {
@@ -45,6 +52,11 @@
     ],
     "menus": {
       "editor/context": [
+        {
+          "command": "extGraph.analyzeCurrentChanges",
+          "when": "resourceLangId == java",
+          "group": "navigation@29"
+        },
         {
           "command": "extGraph.showImpactGraph",
           "when": "resourceLangId == java",
@@ -82,6 +94,18 @@
           "default": 0,
           "minimum": 0,
           "description": "Maximum recursive method/callback depth for endpoint flow traces. Use 0 for full depth up to the 20-level safety cap."
+        },
+        "extGraph.enableCodeLens": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show inline Java Impact Flow CodeLens entries on Java classes and methods."
+        },
+        "extGraph.codeLensMaxSymbols": {
+          "type": "number",
+          "default": 6,
+          "minimum": 1,
+          "maximum": 20,
+          "description": "Maximum Java classes or methods per file that receive impact-count CodeLens entries."
         }
       }
     }

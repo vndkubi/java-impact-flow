@@ -132,6 +132,39 @@ export function renderImpactGraphHtml(graph: ImpactGraph): string {
     .product-row strong { font-size: 16px; }
     .version-pill { border: 1px solid var(--border); border-radius: 999px; padding: 1px 6px; color: var(--muted); font-size: 10px; }
     .branch-line { margin-top: 8px; color: var(--muted); font-size: 12px; }
+    .trust-pill {
+      min-width: 58px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 2px 7px;
+      text-align: center;
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: .05em;
+      text-transform: uppercase;
+    }
+    .trust-pill.high { color: var(--target); border-color: color-mix(in srgb, var(--target) 55%, var(--border) 45%); background: rgba(45, 212, 191, .1); }
+    .trust-pill.medium { color: #fde68a; border-color: rgba(245, 158, 11, .48); background: rgba(245, 158, 11, .1); }
+    .trust-pill.low { color: var(--danger); border-color: rgba(248, 113, 113, .52); background: rgba(248, 113, 113, .1); }
+    .trust-card {
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: var(--panel-2);
+      padding: 9px;
+      display: grid;
+      gap: 8px;
+    }
+    .trust-card.high { border-color: color-mix(in srgb, var(--target) 45%, var(--border) 55%); }
+    .trust-card.medium { border-color: rgba(245, 158, 11, .42); }
+    .trust-card.low { border-color: rgba(248, 113, 113, .48); }
+    .trust-score-line { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+    .trust-score-line strong { font-size: 22px; line-height: 1; }
+    .trust-score-line span { color: var(--muted); font-size: 11px; }
+    .trust-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+    .trust-metric { border: 1px solid var(--border); border-radius: 6px; background: var(--panel-3); padding: 6px; }
+    .trust-metric span { display: block; color: var(--muted); font-size: 10px; }
+    .trust-metric strong { display: block; margin-top: 3px; font-size: 13px; }
+    .trust-reasons { margin: 0; padding-left: 16px; color: var(--muted); font-size: 11px; line-height: 1.45; }
     .section-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
     .count { color: var(--muted); font-size: 12px; }
     .metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
@@ -193,7 +226,7 @@ export function renderImpactGraphHtml(graph: ImpactGraph): string {
     }
     .test-file { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-size: 12px; font-weight: 700; }
     .test-meta { color: var(--muted); font-size: 11px; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .test-command-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; align-items: center; }
+    .test-command-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 6px; align-items: center; }
     .test-command-row code {
       min-width: 0;
       overflow: hidden;
@@ -603,7 +636,11 @@ export function renderImpactGraphHtml(graph: ImpactGraph): string {
           <div class="product-row"><strong>Ext Graph</strong><span class="version-pill">v0.1.0</span></div>
           <h1 id="targetTitle"></h1>
           <div class="meta" id="targetMeta"></div>
-          <div class="branch-line">⌁ local Java analyzer</div>
+          <div class="branch-line">local Java analyzer</div>
+        </section>
+        <section class="panel-section">
+          <div class="section-head"><h2>Trust Score</h2><span id="trustPill" class="trust-pill"></span></div>
+          <div id="trustScore"></div>
         </section>
         <section class="panel-section">
           <div class="section-head"><h2>Summary</h2></div>
@@ -738,6 +775,7 @@ export function renderImpactGraphHtml(graph: ImpactGraph): string {
     document.getElementById('graphMeta').textContent = graph.nodes.length + ' nodes, ' + graph.edges.length + ' edges';
 
     bindShell();
+    renderTrust();
     renderSummary();
     renderSuggestedTests();
     renderFlowList();
@@ -803,6 +841,35 @@ export function renderImpactGraphHtml(graph: ImpactGraph): string {
       document.getElementById('toggleGraphLabels').classList.toggle('active', state.graphLabels);
     }
 
+    function renderTrust() {
+      const trust = graph.metadata.trust || {
+        level: 'medium',
+        score: 50,
+        reasons: ['Trust score is unavailable for this report schema.'],
+        resolvedCallRate: 0,
+        averageConfidence: 0,
+        unresolvedCalls: 0,
+        staticOnly: true
+      };
+      const level = String(trust.level || 'medium').toLowerCase();
+      const pill = document.getElementById('trustPill');
+      pill.textContent = level;
+      pill.className = 'trust-pill ' + level;
+      document.getElementById('trustScore').innerHTML =
+        '<div class="trust-card ' + level + '">' +
+          '<div class="trust-score-line"><strong>' + Number(trust.score || 0) + '</strong><span>report confidence</span></div>' +
+          '<div class="trust-metrics">' +
+            '<div class="trust-metric"><span>Resolved calls</span><strong>' + Math.round(Number(trust.resolvedCallRate || 0) * 100) + '%</strong></div>' +
+            '<div class="trust-metric"><span>Avg confidence</span><strong>' + Math.round(Number(trust.averageConfidence || 0) * 100) + '%</strong></div>' +
+          '</div>' +
+          '<ul class="trust-reasons">' + (trust.reasons || []).slice(0, 4).map(reason => '<li>' + escapeHtml(reason) + '</li>').join('') + '</ul>' +
+          '<button class="action-btn" id="publishDiagnostics" type="button">Publish Diagnostics</button>' +
+        '</div>';
+      document.getElementById('publishDiagnostics').onclick = () => {
+        if (vscodeApi) vscodeApi.postMessage({ type: 'publishDiagnostics' });
+      };
+    }
+
     function renderSummary() {
       const summaryItems = [
         ['Endpoints', graph.summary.endpoints],
@@ -831,7 +898,16 @@ export function renderImpactGraphHtml(graph: ImpactGraph): string {
 
     function renderSuggestedTests() {
       const suggestions = suggestedTestFiles();
-      document.getElementById('testSuggestionCount').textContent = suggestions.length ? suggestions.length + ' files' : '0';
+      document.getElementById('testSuggestionCount').innerHTML = suggestions.length
+        ? '<button class="copy-test-command" id="runTopTests" type="button">Run Top 3</button>'
+        : '0';
+      const runTop = document.getElementById('runTopTests');
+      if (runTop) {
+        runTop.onclick = event => {
+          event.stopPropagation();
+          runTestCommands(suggestions.slice(0, 3).map(item => testCommandForFile(item.file)));
+        };
+      }
       const list = document.getElementById('suggestedTests');
       if (!suggestions.length) {
         list.innerHTML = '<div class="empty">No related test files found.</div>';
@@ -843,9 +919,18 @@ export function renderImpactGraphHtml(graph: ImpactGraph): string {
           '<div class="test-suggestion-top"><span class="test-rank">' + (index + 1) + '</span><span class="test-file">' + escapeHtml(shortFile(item.file)) + '</span></div>' +
           '<div class="test-meta">' + item.count + ' evidence | first line ' + item.line + '</div>' +
           '<div class="test-meta">' + escapeHtml(item.kinds.join(', ')) + '</div>' +
-          '<div class="test-command-row"><code title="' + escapeHtml(command) + '">' + escapeHtml(command) + '</code><button class="copy-test-command" type="button" data-copy-test-command="' + escapeHtml(item.file) + '">Copy</button></div>' +
+          '<div class="test-command-row"><code title="' + escapeHtml(command) + '">' + escapeHtml(command) + '</code><button class="copy-test-command" type="button" data-run-test-command="' + escapeHtml(item.file) + '">Run</button><button class="copy-test-command" type="button" data-copy-test-command="' + escapeHtml(item.file) + '">Copy</button></div>' +
         '</div>';
       }).join('');
+      list.querySelectorAll('[data-run-test-command]').forEach(button => {
+        button.onclick = async event => {
+          event.stopPropagation();
+          const file = button.dataset.runTestCommand || '';
+          const started = await runTestCommand(testCommandForFile(file));
+          button.textContent = started ? 'Started' : 'Failed';
+          setTimeout(() => { button.textContent = 'Run'; }, 1200);
+        };
+      });
       list.querySelectorAll('[data-copy-test-command]').forEach(button => {
         button.onclick = async event => {
           event.stopPropagation();
@@ -1358,6 +1443,25 @@ export function renderImpactGraphHtml(graph: ImpactGraph): string {
           return false;
         }
       }
+    }
+
+    async function runTestCommand(command) {
+      if (vscodeApi) {
+        vscodeApi.postMessage({ type: 'runTestCommand', command });
+        return true;
+      }
+      return copyText(command);
+    }
+
+    function runTestCommands(commands) {
+      const filtered = commands.filter(Boolean);
+      if (!filtered.length) return false;
+      if (vscodeApi) {
+        vscodeApi.postMessage({ type: 'runTestCommands', commands: filtered });
+        return true;
+      }
+      copyText(filtered.join('\\n'));
+      return true;
     }
 
     function clearReferenceSearches() {

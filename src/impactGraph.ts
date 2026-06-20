@@ -27,6 +27,7 @@ export interface ImpactGraph {
     truncated: boolean;
     skippedLargeFiles: number;
     buildSystem: ProjectBuildSystem;
+    trust: ImpactTrustScore;
   };
   summary: {
     javaFilesScanned: number;
@@ -53,6 +54,16 @@ export interface ImpactGraph {
 export interface ProjectBuildSystem {
   tool: 'gradle' | 'maven' | 'unknown';
   wrapper?: string;
+}
+
+export interface ImpactTrustScore {
+  level: 'high' | 'medium' | 'low';
+  score: number;
+  reasons: string[];
+  resolvedCallRate: number;
+  averageConfidence: number;
+  unresolvedCalls: number;
+  staticOnly: boolean;
 }
 
 export interface FlowTrace {
@@ -1255,7 +1266,18 @@ function assembleGraph(input: {
   const fieldReads = input.references.filter(hit => hit.kind === 'field_read');
   const fieldWrites = input.references.filter(hit => hit.kind === 'field_write');
   const calls = input.references.filter(hit => hit.kind === 'call');
-  const warnings = buildWarnings(input, nodes.size, edges.size);
+  const truncated = input.truncated || input.references.length > 180 || nodes.size >= input.maxNodes || edges.size >= input.maxEdges;
+  const warnings = buildWarnings({ ...input, truncated }, nodes.size, edges.size);
+  const trust = buildTrustScore({
+    definitions: input.definitions.length,
+    references: input.references.length,
+    evidence,
+    flows,
+    skippedLargeFiles: input.skippedLargeFiles,
+    truncated,
+    nodeCount: nodes.size,
+    edgeCount: edges.size,
+  });
 
   return {
     schemaVersion: 1,
@@ -1266,9 +1288,10 @@ function assembleGraph(input: {
       generatedAt: new Date().toISOString(),
       analyzer: 'ext-graph-static-java',
       fileLimit: input.maxFiles,
-      truncated: input.truncated || input.references.length > 180 || nodes.size >= input.maxNodes || edges.size >= input.maxEdges,
+      truncated,
       skippedLargeFiles: input.skippedLargeFiles,
       buildSystem: input.buildSystem,
+      trust,
     },
     summary: {
       javaFilesScanned: input.facts.length,
@@ -1290,6 +1313,70 @@ function assembleGraph(input: {
     flows,
     evidence,
     warnings,
+  };
+}
+
+function buildTrustScore(input: {
+  definitions: number;
+  references: number;
+  evidence: EvidenceItem[];
+  flows: FlowTrace[];
+  skippedLargeFiles: number;
+  truncated: boolean;
+  nodeCount: number;
+  edgeCount: number;
+}): ImpactTrustScore {
+  const diagnostics = input.flows.map(flow => flow.diagnostics);
+  const resolvedCalls = diagnostics.reduce((sum, item) => sum + item.resolvedCalls, 0);
+  const unresolvedCalls = diagnostics.reduce((sum, item) => sum + item.unresolvedCalls, 0);
+  const executableCalls = resolvedCalls + unresolvedCalls;
+  const resolvedCallRate = executableCalls > 0 ? resolvedCalls / executableCalls : 1;
+  const flowConfidences = input.flows.flatMap(flow => flow.steps.map(step => step.confidence));
+  const confidences = [...input.evidence.map(item => item.confidence), ...flowConfidences];
+  const averageConfidence = confidences.length
+    ? confidences.reduce((sum, value) => sum + value, 0) / confidences.length
+    : 0;
+  const reasons: string[] = ['Static regex analyzer; validate important paths against source or tests.'];
+  let score = 88;
+
+  if (input.definitions === 0) {
+    score -= 18;
+    reasons.push('No exact definition matched the requested target.');
+  }
+  if (input.references === 0) {
+    score -= 18;
+    reasons.push('No references matched the target in scanned Java files.');
+  }
+  if (input.truncated) {
+    score -= 18;
+    reasons.push('Result was truncated by file, node, edge, or evidence caps.');
+  }
+  if (input.skippedLargeFiles > 0) {
+    score -= Math.min(15, 5 + input.skippedLargeFiles * 2);
+    reasons.push(`${input.skippedLargeFiles} large Java file(s) were skipped.`);
+  }
+  if (executableCalls > 0 && unresolvedCalls > 0) {
+    score -= Math.min(30, Math.round((unresolvedCalls / executableCalls) * 30));
+    reasons.push(`${unresolvedCalls} of ${executableCalls} flow call/callback step(s) were unresolved.`);
+  }
+  if (averageConfidence > 0 && averageConfidence < 0.65) {
+    score -= 12;
+    reasons.push('Average evidence confidence is below 65%.');
+  }
+  if (input.nodeCount === 0 || input.edgeCount === 0) {
+    score -= 12;
+    reasons.push('Graph is sparse; use a more specific Java class, method, or field.');
+  }
+
+  const bounded = clampInt(score, 0, 100);
+  return {
+    level: bounded >= 75 ? 'high' : bounded >= 50 ? 'medium' : 'low',
+    score: bounded,
+    reasons,
+    resolvedCallRate: Number(resolvedCallRate.toFixed(2)),
+    averageConfidence: Number(averageConfidence.toFixed(2)),
+    unresolvedCalls,
+    staticOnly: true,
   };
 }
 
