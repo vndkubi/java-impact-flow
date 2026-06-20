@@ -45,7 +45,7 @@ Java index.
 ## Quickstart
 
 ```powershell
-cd D:\Personal\Projects\ext-graph
+cd <java-impact-flow-repo>
 npm.cmd install
 npm.cmd run build
 npm.cmd test
@@ -56,11 +56,11 @@ passing.
 
 ## Run In VS Code
 
-1. Open `D:\Personal\Projects\ext-graph` in VS Code.
+1. Open this repository in VS Code.
 2. Run `npm.cmd install` once, then `npm.cmd run build`.
 3. Press `F5` to start an Extension Development Host.
 4. In the Extension Development Host, open a Java workspace, for example
-   `D:\Personal\Projects\doughnut`.
+   `<java-workspace>`.
 5. Open a Java file, place the cursor on a class, method, or field, then run:
    `Java Impact Flow: Show Impact View`.
 6. Pick a mode such as `api-flow` or `patch-impact`.
@@ -74,7 +74,7 @@ that jumps back to the source line. Suggested tests include `Run`, `Copy`, and
 `Run Top 3` actions for commands such as:
 
 ```powershell
-.\gradlew.bat :backend:test --tests "com.odde.doughnut.controllers.NotebookSharingGroupControllerTest"
+.\gradlew.bat :backend:test --tests "com.example.controllers.OrderControllerTest"
 ```
 
 ## CLI
@@ -82,13 +82,13 @@ that jumps back to the source line. Suggested tests include `Run`, `Copy`, and
 The CLI uses the same analyzer and renderer as the VS Code webview.
 
 ```powershell
-node dist/cli.js --root D:\Personal\Projects\doughnut --target BazaarNotebook --mode patch-impact --max-files 0 --max-depth 0 --out outputs\ui-bazaarnotebook-patch-impact.json --html-out outputs\ui-bazaarnotebook-patch-impact.html
+node dist/cli.js --root <java-workspace> --target OrderService --mode patch-impact --max-files 0 --max-depth 0 --out outputs\order-service-patch-impact.json --html-out outputs\order-service-patch-impact.html
 ```
 
 After packaging or linking the binary, the equivalent command is:
 
 ```powershell
-java-impact-flow --root D:\Personal\Projects\doughnut --target BazaarNotebook --mode patch-impact --max-files 0 --max-depth 0 --out .ext-graph\BazaarNotebook.impact.json --html-out .ext-graph\BazaarNotebook.impact.html
+java-impact-flow --root <java-workspace> --target OrderService --mode patch-impact --max-files 0 --max-depth 0 --out .ext-graph\OrderService.impact.json --html-out .ext-graph\OrderService.impact.html
 ```
 
 ### CLI Options
@@ -168,7 +168,7 @@ The static fallback analyzer currently recognizes:
 The current smoke report was generated with:
 
 ```powershell
-node dist/cli.js --root D:\Personal\Projects\doughnut --target BazaarNotebook --mode patch-impact --max-files 0 --max-depth 0 --out outputs\ui-bazaarnotebook-patch-impact.json --html-out outputs\ui-bazaarnotebook-patch-impact.html
+node dist/cli.js --root <java-workspace> --target OrderService --mode patch-impact --max-files 0 --max-depth 0 --out outputs\order-service-patch-impact.json --html-out outputs\order-service-patch-impact.html
 ```
 
 Observed output from that run:

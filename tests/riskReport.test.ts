@@ -88,7 +88,7 @@ function sampleGraph(input: {
   return {
     schemaVersion: 1,
     metadata: {
-      root: 'D:/repo',
+      root: '/workspace/repo',
       target: input.target,
       mode: 'patch-impact',
       generatedAt: '2026-06-21T00:00:00.000Z',
