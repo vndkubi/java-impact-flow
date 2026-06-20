@@ -12,3 +12,5 @@
 - Added inline CodeLens impact counts for Java classes and methods.
 - Added `Run`, `Run Top 3`, and `Copy` actions for suggested test commands.
 - Added opt-in Problems diagnostics for low-confidence unresolved flow steps.
+- Added `Java Impact Flow: Check Patch Risk` with pass/warn/fail patch reports.
+- Added suggested-test explanations and copyable PR impact summaries.

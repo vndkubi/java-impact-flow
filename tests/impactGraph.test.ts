@@ -129,9 +129,12 @@ class UserListingPage {}
     expect(html).toContain('Trust Score');
     expect(html).toContain('trust-card');
     expect(html).toContain('renderTrust');
+    expect(html).toContain('Copy PR Summary');
+    expect(html).toContain('impactPrSummaryMarkdown');
     expect(html).toContain("type: 'publishDiagnostics'");
     expect(html).toContain('copy-test-command');
     expect(html).toContain('data-run-test-command');
+    expect(html).toContain('<strong>Why:</strong>');
     expect(html).toContain("type: 'runTestCommand'");
     expect(html).toContain('testCommandForFile');
     expect(html).toContain("type: 'copyText'");

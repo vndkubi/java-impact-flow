@@ -30,7 +30,8 @@
     "onLanguage:java",
     "onCommand:extGraph.showImpactGraph",
     "onCommand:extGraph.exportImpactGraph",
-    "onCommand:extGraph.analyzeCurrentChanges"
+    "onCommand:extGraph.analyzeCurrentChanges",
+    "onCommand:extGraph.checkPatchRisk"
   ],
   "contributes": {
     "commands": [
@@ -42,6 +43,11 @@
       {
         "command": "extGraph.analyzeCurrentChanges",
         "title": "Java Impact Flow: Analyze Current Changes",
+        "category": "Java Impact Flow"
+      },
+      {
+        "command": "extGraph.checkPatchRisk",
+        "title": "Java Impact Flow: Check Patch Risk",
         "category": "Java Impact Flow"
       },
       {
@@ -58,14 +64,19 @@
           "group": "navigation@29"
         },
         {
-          "command": "extGraph.showImpactGraph",
+          "command": "extGraph.checkPatchRisk",
           "when": "resourceLangId == java",
           "group": "navigation@30"
         },
         {
-          "command": "extGraph.exportImpactGraph",
+          "command": "extGraph.showImpactGraph",
           "when": "resourceLangId == java",
           "group": "navigation@31"
+        },
+        {
+          "command": "extGraph.exportImpactGraph",
+          "when": "resourceLangId == java",
+          "group": "navigation@32"
         }
       ]
     },

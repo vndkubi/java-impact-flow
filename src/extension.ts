@@ -6,6 +6,8 @@ import { collectChangedJavaTargets, type ChangedJavaTarget } from './gitChanges.
 import { buildImpactGraph, type ImpactGraph, type ImpactMode } from './impactGraph.js';
 import { findJavaSourceSymbols, impactLensTitle } from './javaSymbols.js';
 import { renderImpactGraphHtml } from './render.js';
+import { renderPatchRiskReportHtml } from './renderRiskReport.js';
+import { buildPatchRiskReport, type PatchRiskReport } from './riskReport.js';
 
 let impactDiagnostics: vscode.DiagnosticCollection | undefined;
 
@@ -16,6 +18,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('extGraph.showImpactGraph', () => showImpactGraph(false)),
     vscode.commands.registerCommand('extGraph.exportImpactGraph', () => showImpactGraph(true)),
     vscode.commands.registerCommand('extGraph.analyzeCurrentChanges', analyzeCurrentChanges),
+    vscode.commands.registerCommand('extGraph.checkPatchRisk', checkPatchRisk),
     vscode.commands.registerCommand('extGraph.showImpactForTarget', (target: string, mode?: ImpactMode) => showImpactForTarget(target, mode ?? 'patch-impact')),
     vscode.languages.registerCodeLensProvider({ language: 'java', scheme: 'file' }, new ImpactCodeLensProvider()),
   );
@@ -118,6 +121,47 @@ async function analyzeCurrentChanges(): Promise<void> {
   openImpactPanel(workspace, panel, graph);
 }
 
+async function checkPatchRisk(): Promise<void> {
+  const workspace = workspaceRoot();
+  if (!workspace) {
+    vscode.window.showErrorMessage('Java Impact Flow needs an open workspace folder.');
+    return;
+  }
+  const config = vscode.workspace.getConfiguration('extGraph');
+  const targets = await vscode.window.withProgress({
+    location: vscode.ProgressLocation.Notification,
+    title: 'Java Impact Flow: checking patch risk',
+    cancellable: false,
+  }, async () => collectChangedJavaTargets(workspace, { maxTargets: 12 }));
+
+  if (targets.length === 0) {
+    vscode.window.showInformationMessage('Java Impact Flow did not find changed Java files in Git status.');
+    return;
+  }
+
+  const graphs: ImpactGraph[] = [];
+  for (const target of targets.slice(0, 8)) {
+    graphs.push(await buildImpactGraph({
+      root: workspace,
+      target: target.target,
+      mode: 'patch-impact',
+      maxFiles: config.get<number>('maxFiles') ?? 0,
+      maxFileBytes: config.get<number>('maxFileBytes') ?? 300_000,
+      maxDepth: config.get<number>('maxDepth') ?? 0,
+      includeTests: config.get<boolean>('includeTests') ?? true,
+    }));
+  }
+
+  const report = buildPatchRiskReport(targets, graphs);
+  const panel = vscode.window.createWebviewPanel(
+    'javaImpactFlowRisk',
+    `Patch Risk: ${report.decision.toUpperCase()}`,
+    vscode.ViewColumn.Beside,
+    { enableScripts: true },
+  );
+  openRiskPanel(workspace, panel, report);
+}
+
 async function showImpactForTarget(target: string, mode: ImpactMode): Promise<void> {
   const workspace = workspaceRoot();
   if (!workspace) {
@@ -154,6 +198,13 @@ function openImpactPanel(workspace: string, panel: vscode.WebviewPanel, graph: I
   });
 }
 
+function openRiskPanel(workspace: string, panel: vscode.WebviewPanel, report: PatchRiskReport): void {
+  panel.webview.html = renderPatchRiskReportHtml(report);
+  panel.webview.onDidReceiveMessage(async message => {
+    await handleUtilityWebviewMessage(workspace, message);
+  });
+}
+
 async function handleWebviewMessage(workspace: string, graph: ImpactGraph, message: unknown): Promise<void> {
   if (!message || typeof message !== 'object') return;
   const record = message as Record<string, unknown>;
@@ -177,6 +228,20 @@ async function handleWebviewMessage(workspace: string, graph: ImpactGraph, messa
   }
   if (record.type === 'publishDiagnostics') {
     publishImpactDiagnostics(workspace, graph);
+  }
+}
+
+async function handleUtilityWebviewMessage(workspace: string, message: unknown): Promise<void> {
+  if (!message || typeof message !== 'object') return;
+  const record = message as Record<string, unknown>;
+  if (record.type === 'copyText' && typeof record.text === 'string') {
+    await vscode.env.clipboard.writeText(record.text);
+    return;
+  }
+  if (record.type === 'runTestCommands' && Array.isArray(record.commands)) {
+    for (const command of record.commands) {
+      if (typeof command === 'string') runTestCommand(workspace, command);
+    }
   }
 }
 

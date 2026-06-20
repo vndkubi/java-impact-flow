@@ -31,6 +31,9 @@ Java index.
   and opens a patch-impact report.
 - Inline CodeLens impact counts on Java classes and methods.
 - Opt-in Problems diagnostics for low-confidence unresolved flow steps.
+- A patch risk gate for changed Java code with pass/warn/fail, impacted
+  endpoints, suggested tests, trust, and unresolved-call risk.
+- "Why this test?" explanations and copyable PR impact summaries.
 
 ## Requirements
 
@@ -63,6 +66,8 @@ passing.
 6. Pick a mode such as `api-flow` or `patch-impact`.
 7. To inspect the current patch instead of typing a target, run:
    `Java Impact Flow: Analyze Current Changes`.
+8. To get a commit/PR-oriented risk decision, run:
+   `Java Impact Flow: Check Patch Risk`.
 
 The webview opens beside the editor. Reference rows include an `Open` action
 that jumps back to the source line. Suggested tests include `Run`, `Copy`, and
@@ -119,6 +124,10 @@ opens the corresponding patch-impact view.
 
 The Trust Score panel includes `Publish Diagnostics`, which adds low-confidence
 unresolved call/callback steps to the VS Code Problems panel on demand.
+
+`Java Impact Flow: Check Patch Risk` produces a pass/warn/fail report for the
+current Git patch. It includes changed targets, impacted endpoints, top tests,
+why each test was suggested, unresolved calls, and a copyable PR summary.
 
 ## Configuration
 

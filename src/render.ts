@@ -864,9 +864,13 @@ export function renderImpactGraphHtml(graph: ImpactGraph): string {
           '</div>' +
           '<ul class="trust-reasons">' + (trust.reasons || []).slice(0, 4).map(reason => '<li>' + escapeHtml(reason) + '</li>').join('') + '</ul>' +
           '<button class="action-btn" id="publishDiagnostics" type="button">Publish Diagnostics</button>' +
+          '<button class="action-btn" id="copyPrSummary" type="button">Copy PR Summary</button>' +
         '</div>';
       document.getElementById('publishDiagnostics').onclick = () => {
         if (vscodeApi) vscodeApi.postMessage({ type: 'publishDiagnostics' });
+      };
+      document.getElementById('copyPrSummary').onclick = async () => {
+        await copyText(impactPrSummaryMarkdown());
       };
     }
 
@@ -919,6 +923,7 @@ export function renderImpactGraphHtml(graph: ImpactGraph): string {
           '<div class="test-suggestion-top"><span class="test-rank">' + (index + 1) + '</span><span class="test-file">' + escapeHtml(shortFile(item.file)) + '</span></div>' +
           '<div class="test-meta">' + item.count + ' evidence | first line ' + item.line + '</div>' +
           '<div class="test-meta">' + escapeHtml(item.kinds.join(', ')) + '</div>' +
+          '<div class="test-meta"><strong>Why:</strong> ' + escapeHtml(item.why) + '</div>' +
           '<div class="test-command-row"><code title="' + escapeHtml(command) + '">' + escapeHtml(command) + '</code><button class="copy-test-command" type="button" data-run-test-command="' + escapeHtml(item.file) + '">Run</button><button class="copy-test-command" type="button" data-copy-test-command="' + escapeHtml(item.file) + '">Copy</button></div>' +
         '</div>';
       }).join('');
@@ -1343,6 +1348,7 @@ export function renderImpactGraphHtml(graph: ImpactGraph): string {
     }
 
     function suggestedTestFiles() {
+      const endpoints = endpointLabelsForGraph();
       const groups = new Map();
       (graph.evidence || []).forEach(item => {
         if (!item.file || (!isTestFile(item.file) && item.kind !== 'test')) return;
@@ -1365,9 +1371,52 @@ export function renderImpactGraphHtml(graph: ImpactGraph): string {
           line: group.line,
           score,
           kinds: [...group.kinds].sort(),
-          name
+          name,
+          why: testSuggestionWhy(group.file, group.count, endpoints),
+          evidenceChain: [
+            'Changed target: ' + graph.metadata.target,
+            'Impacted endpoint: ' + (endpoints[0] || 'reference evidence'),
+            'Test evidence: ' + group.file
+          ]
         };
       }).sort((a, b) => b.score - a.score || b.count - a.count || a.file.localeCompare(b.file)).slice(0, 8);
+    }
+
+    function testSuggestionWhy(file, count, endpoints) {
+      const endpoint = endpoints[0] || 'reference evidence';
+      return 'Covers ' + graph.metadata.target + ' via ' + endpoint + ' with ' + count + ' evidence ' + (count === 1 ? 'hit.' : 'hits.');
+    }
+
+    function endpointLabelsForGraph() {
+      const labels = [];
+      (graph.nodes || []).forEach(node => {
+        if (node.kind === 'endpoint' && node.label) labels.push(node.label);
+      });
+      (graph.flows || []).forEach(flow => {
+        if (flow.endpoint) labels.push(flow.endpoint.method + ' ' + flow.endpoint.path);
+        else if (flow.label) labels.push(flow.label);
+      });
+      return [...new Set(labels)].filter(Boolean);
+    }
+
+    function impactPrSummaryMarkdown() {
+      const tests = suggestedTestFiles().slice(0, 5);
+      const endpoints = endpointLabelsForGraph();
+      const trust = graph.metadata.trust || { level: 'medium', score: 0, unresolvedCalls: 0 };
+      const lines = [
+        'Changed: ' + graph.metadata.target,
+        'Impacted endpoints: ' + (endpoints.length ? endpoints.join(', ') : '-'),
+        'Suggested tests: ' + (tests.length ? tests.map(test => testClassNameFromFile(test.file)).join(', ') : '-'),
+        'Trust: ' + capitalize(String(trust.level || 'medium')) + ' (' + Number(trust.score || 0) + ')',
+        'Unresolved calls: ' + Number(trust.unresolvedCalls || 0)
+      ];
+      if (tests.length) {
+        lines.push('', 'Run:');
+        tests.forEach(test => lines.push('- ' + testCommandForFile(test.file)));
+        lines.push('', 'Why these tests:');
+        tests.forEach(test => lines.push('- ' + testClassNameFromFile(test.file) + ': ' + test.why));
+      }
+      return lines.join('\\n');
     }
 
     function testCommandForFile(file) {
@@ -1404,9 +1453,10 @@ export function renderImpactGraphHtml(graph: ImpactGraph): string {
 
     function testClassNameFromFile(file) {
       const normalized = String(file || '').replace(/\\\\/g, '/');
-      const javaIndex = normalized.indexOf('/src/test/java/');
+      const javaMarker = 'src/test/java/';
+      const javaIndex = normalized.indexOf(javaMarker);
       if (javaIndex >= 0) {
-        return normalized.slice(javaIndex + '/src/test/java/'.length).replace(/\\.java$/, '').split('/').join('.');
+        return normalized.slice(javaIndex + javaMarker.length).replace(/\\.java$/, '').split('/').join('.');
       }
       const testIndex = normalized.indexOf('/test/');
       if (testIndex >= 0) {
@@ -1417,6 +1467,11 @@ export function renderImpactGraphHtml(graph: ImpactGraph): string {
 
     function simpleClassName(value) {
       return String(value || '').replace(/\\\\/g, '/').split('/').pop().split('.').filter(Boolean).pop() || String(value || '');
+    }
+
+    function capitalize(value) {
+      const text = String(value || '');
+      return text.charAt(0).toUpperCase() + text.slice(1);
     }
 
     async function copyText(text) {
