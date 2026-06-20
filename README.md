@@ -11,11 +11,10 @@ Repository name: `java-impact-flow`
 
 ## Status
 
-This project is ready for local evaluation and Marketplace packaging work, but
-the analyzer is still a static prototype. It scans source files locally with
-bounded regex-based Java parsing. For production-grade precision, the data
-provider should later be backed by JDT LS, CodeGraph indexed facts, or another
-semantic Java index.
+This extension is an early preview. It scans source files locally with bounded
+regex-based Java parsing. For production-grade precision, the data provider
+should later be backed by JDT LS, CodeGraph indexed facts, or another semantic
+Java index.
 
 ## What It Shows
 
@@ -168,11 +167,10 @@ Useful files:
 - `src/cli.ts` - headless CLI entrypoint.
 - `tests/impactGraph.test.ts` - analyzer and renderer coverage.
 
-## Marketplace Checklist
+## Release Checklist
 
-Before publishing, finish these items:
+For maintainers preparing a Marketplace release:
 
-- Add a real `publisher` value to `package.json`.
 - Add an icon and screenshots for the Marketplace page.
 - Decide whether to rename command IDs from `extGraph.*` to
   `javaImpactFlow.*`; keep the old IDs as aliases if existing users matter.

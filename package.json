@@ -3,7 +3,7 @@
   "displayName": "Java Impact Flow",
   "description": "Visualize Java field, method, callback, API-flow impact, and suggested tests in VS Code.",
   "version": "0.1.0",
-  "private": true,
+  "publisher": "vndkubi",
   "type": "module",
   "main": "./dist/extension.js",
   "bin": {
@@ -14,6 +14,12 @@
     "vscode": "^1.90.0",
     "node": ">=20.0.0"
   },
+  "icon": "assets/icon.png",
+  "categories": [
+    "Programming Languages",
+    "Visualization",
+    "Testing"
+  ],
   "scripts": {
     "build": "tsc -p .",
     "lint": "tsc --noEmit -p .",
@@ -90,6 +96,14 @@
     "call-hierarchy",
     "references"
   ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vndkubi/java-impact-flow.git"
+  },
+  "bugs": {
+    "url": "https://github.com/vndkubi/java-impact-flow/issues"
+  },
+  "homepage": "https://github.com/vndkubi/java-impact-flow#readme",
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^20.17.0",
