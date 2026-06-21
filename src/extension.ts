@@ -3,24 +3,60 @@ import path from 'node:path';
 import * as vscode from 'vscode';
 import { diagnosticItemsForImpactGraph } from './diagnostics.js';
 import { collectChangedJavaTargets, type ChangedJavaTarget } from './gitChanges.js';
-import { buildImpactGraph, type ImpactGraph, type ImpactMode } from './impactGraph.js';
+import { type ImpactGraph, type ImpactMode } from './impactGraph.js';
+import { ImpactGraphCache } from './impactCache.js';
 import { findJavaSourceSymbols, impactLensTitle } from './javaSymbols.js';
-import { renderImpactGraphHtml } from './render.js';
+import { renderImpactGraphHtml, type ImpactViewTab } from './render.js';
 import { renderPatchRiskReportHtml } from './renderRiskReport.js';
+import { RiskWorkbenchProvider, type AnalyzerOptions } from './riskWorkbench.js';
 import { buildPatchRiskReport, type PatchRiskReport } from './riskReport.js';
 
 let impactDiagnostics: vscode.DiagnosticCollection | undefined;
+const impactCache = new ImpactGraphCache();
+let riskWorkbench: RiskWorkbenchProvider | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
   impactDiagnostics = vscode.languages.createDiagnosticCollection('java-impact-flow');
+  riskWorkbench = new RiskWorkbenchProvider({
+    cache: impactCache,
+    getWorkspaceRoot: workspaceRoot,
+    getAnalyzerOptions: currentAnalyzerOptions,
+    openRiskReport: openRiskReportPanel,
+    runTestCommand,
+    copyText: text => vscode.env.clipboard.writeText(text),
+  });
+  const javaWatcher = vscode.workspace.createFileSystemWatcher('**/*.java');
+  const invalidateAnalysis = () => {
+    impactCache.clear();
+    riskWorkbench?.markStale();
+  };
   context.subscriptions.push(
     impactDiagnostics,
+    vscode.window.createTreeView('javaImpactFlowWorkbench', {
+      treeDataProvider: riskWorkbench,
+      showCollapseAll: true,
+    }),
     vscode.commands.registerCommand('extGraph.showImpactGraph', () => showImpactGraph(false)),
     vscode.commands.registerCommand('extGraph.exportImpactGraph', () => showImpactGraph(true)),
     vscode.commands.registerCommand('extGraph.analyzeCurrentChanges', analyzeCurrentChanges),
+    vscode.commands.registerCommand('extGraph.staticDebugEndpoint', staticDebugEndpoint),
     vscode.commands.registerCommand('extGraph.checkPatchRisk', checkPatchRisk),
+    vscode.commands.registerCommand('extGraph.refreshWorkbench', () => riskWorkbench?.refresh()),
+    vscode.commands.registerCommand('extGraph.copyWorkbenchPrSummary', () => riskWorkbench?.copyPrSummary()),
+    vscode.commands.registerCommand('extGraph.runWorkbenchTopTests', () => riskWorkbench?.runTopTests()),
+    vscode.commands.registerCommand('extGraph.openWorkbenchRiskReport', () => riskWorkbench?.openRiskReport()),
     vscode.commands.registerCommand('extGraph.showImpactForTarget', (target: string, mode?: ImpactMode) => showImpactForTarget(target, mode ?? 'patch-impact')),
-    vscode.languages.registerCodeLensProvider({ language: 'java', scheme: 'file' }, new ImpactCodeLensProvider()),
+    vscode.languages.registerCodeLensProvider({ language: 'java', scheme: 'file' }, new ImpactCodeLensProvider(impactCache)),
+    javaWatcher,
+    javaWatcher.onDidCreate(invalidateAnalysis),
+    javaWatcher.onDidChange(invalidateAnalysis),
+    javaWatcher.onDidDelete(invalidateAnalysis),
+    vscode.workspace.onDidSaveTextDocument(document => {
+      if (document.languageId === 'java' || document.uri.fsPath.endsWith('.java')) invalidateAnalysis();
+    }),
+    vscode.workspace.onDidChangeConfiguration(event => {
+      if (event.affectsConfiguration('extGraph')) invalidateAnalysis();
+    }),
   );
 }
 
@@ -37,23 +73,20 @@ async function showImpactGraph(exportOnly: boolean): Promise<void> {
   const target = await resolveTarget();
   if (!target) return;
 
-  const config = vscode.workspace.getConfiguration('extGraph');
   const mode = await pickMode();
   if (!mode) return;
 
-  const graph = await vscode.window.withProgress({
+  const result = await vscode.window.withProgress({
     location: vscode.ProgressLocation.Notification,
     title: `Ext Graph: building impact graph for ${target}`,
     cancellable: false,
-  }, async () => buildImpactGraph({
+  }, async () => impactCache.getGraph({
     root: workspace,
     target,
     mode,
-    maxFiles: config.get<number>('maxFiles') ?? 0,
-    maxFileBytes: config.get<number>('maxFileBytes') ?? 300_000,
-    maxDepth: config.get<number>('maxDepth') ?? 0,
-    includeTests: config.get<boolean>('includeTests') ?? true,
+    ...currentAnalyzerOptions(),
   }));
+  const graph = result.graph;
 
   if (exportOnly) {
     const outDir = path.join(workspace, '.ext-graph');
@@ -97,20 +130,17 @@ async function analyzeCurrentChanges(): Promise<void> {
   const picked = await pickChangedTarget(targets);
   if (!picked) return;
 
-  const config = vscode.workspace.getConfiguration('extGraph');
-  const graph = await vscode.window.withProgress({
+  const result = await vscode.window.withProgress({
     location: vscode.ProgressLocation.Notification,
     title: `Java Impact Flow: analyzing current change ${picked.target}`,
     cancellable: false,
-  }, async () => buildImpactGraph({
+  }, async () => impactCache.getGraph({
     root: workspace,
     target: picked.target,
     mode: 'patch-impact',
-    maxFiles: config.get<number>('maxFiles') ?? 0,
-    maxFileBytes: config.get<number>('maxFileBytes') ?? 300_000,
-    maxDepth: config.get<number>('maxDepth') ?? 0,
-    includeTests: config.get<boolean>('includeTests') ?? true,
+    ...currentAnalyzerOptions(),
   }));
+  const graph = result.graph;
 
   const panel = vscode.window.createWebviewPanel(
     'extGraphImpact',
@@ -121,13 +151,41 @@ async function analyzeCurrentChanges(): Promise<void> {
   openImpactPanel(workspace, panel, graph);
 }
 
+async function staticDebugEndpoint(): Promise<void> {
+  const workspace = workspaceRoot();
+  if (!workspace) {
+    vscode.window.showErrorMessage('Java Impact Flow needs an open workspace folder.');
+    return;
+  }
+  const target = await resolveTarget();
+  if (!target) return;
+
+  const result = await vscode.window.withProgress({
+    location: vscode.ProgressLocation.Notification,
+    title: `Java Impact Flow: static debugging ${target}`,
+    cancellable: false,
+  }, async () => impactCache.getGraph({
+    root: workspace,
+    target,
+    mode: 'api-flow',
+    ...currentAnalyzerOptions(),
+  }));
+
+  const panel = vscode.window.createWebviewPanel(
+    'javaImpactFlowStaticDebug',
+    `Static Debug: ${target}`,
+    vscode.ViewColumn.Beside,
+    { enableScripts: true },
+  );
+  openImpactPanel(workspace, panel, result.graph, 'static-debug');
+}
+
 async function checkPatchRisk(): Promise<void> {
   const workspace = workspaceRoot();
   if (!workspace) {
     vscode.window.showErrorMessage('Java Impact Flow needs an open workspace folder.');
     return;
   }
-  const config = vscode.workspace.getConfiguration('extGraph');
   const targets = await vscode.window.withProgress({
     location: vscode.ProgressLocation.Notification,
     title: 'Java Impact Flow: checking patch risk',
@@ -141,15 +199,13 @@ async function checkPatchRisk(): Promise<void> {
 
   const graphs: ImpactGraph[] = [];
   for (const target of targets.slice(0, 8)) {
-    graphs.push(await buildImpactGraph({
+    const result = await impactCache.getGraph({
       root: workspace,
       target: target.target,
       mode: 'patch-impact',
-      maxFiles: config.get<number>('maxFiles') ?? 0,
-      maxFileBytes: config.get<number>('maxFileBytes') ?? 300_000,
-      maxDepth: config.get<number>('maxDepth') ?? 0,
-      includeTests: config.get<boolean>('includeTests') ?? true,
-    }));
+      ...currentAnalyzerOptions(),
+    });
+    graphs.push(result.graph);
   }
 
   const report = buildPatchRiskReport(targets, graphs);
@@ -168,20 +224,17 @@ async function showImpactForTarget(target: string, mode: ImpactMode): Promise<vo
     vscode.window.showErrorMessage('Java Impact Flow needs an open workspace folder.');
     return;
   }
-  const config = vscode.workspace.getConfiguration('extGraph');
-  const graph = await vscode.window.withProgress({
+  const result = await vscode.window.withProgress({
     location: vscode.ProgressLocation.Notification,
     title: `Java Impact Flow: building impact graph for ${target}`,
     cancellable: false,
-  }, async () => buildImpactGraph({
+  }, async () => impactCache.getGraph({
     root: workspace,
     target,
     mode,
-    maxFiles: config.get<number>('maxFiles') ?? 0,
-    maxFileBytes: config.get<number>('maxFileBytes') ?? 300_000,
-    maxDepth: config.get<number>('maxDepth') ?? 0,
-    includeTests: config.get<boolean>('includeTests') ?? true,
+    ...currentAnalyzerOptions(),
   }));
+  const graph = result.graph;
   const panel = vscode.window.createWebviewPanel(
     'extGraphImpact',
     `Impact: ${target}`,
@@ -191,8 +244,8 @@ async function showImpactForTarget(target: string, mode: ImpactMode): Promise<vo
   openImpactPanel(workspace, panel, graph);
 }
 
-function openImpactPanel(workspace: string, panel: vscode.WebviewPanel, graph: ImpactGraph): void {
-  panel.webview.html = renderImpactGraphHtml(graph);
+function openImpactPanel(workspace: string, panel: vscode.WebviewPanel, graph: ImpactGraph, initialTab?: ImpactViewTab): void {
+  panel.webview.html = renderImpactGraphHtml(graph, { initialTab });
   panel.webview.onDidReceiveMessage(async message => {
     await handleWebviewMessage(workspace, graph, message);
   });
@@ -203,6 +256,16 @@ function openRiskPanel(workspace: string, panel: vscode.WebviewPanel, report: Pa
   panel.webview.onDidReceiveMessage(async message => {
     await handleUtilityWebviewMessage(workspace, message);
   });
+}
+
+function openRiskReportPanel(workspace: string, report: PatchRiskReport): void {
+  const panel = vscode.window.createWebviewPanel(
+    'javaImpactFlowRisk',
+    `Patch Risk: ${report.decision.toUpperCase()}`,
+    vscode.ViewColumn.Beside,
+    { enableScripts: true },
+  );
+  openRiskPanel(workspace, panel, report);
 }
 
 async function handleWebviewMessage(workspace: string, graph: ImpactGraph, message: unknown): Promise<void> {
@@ -298,6 +361,16 @@ function workspaceRoot(): string | undefined {
   return folder?.uri.fsPath;
 }
 
+function currentAnalyzerOptions(uri?: vscode.Uri): AnalyzerOptions {
+  const config = vscode.workspace.getConfiguration('extGraph', uri);
+  return {
+    maxFiles: config.get<number>('maxFiles') ?? 0,
+    maxFileBytes: config.get<number>('maxFileBytes') ?? 300_000,
+    maxDepth: config.get<number>('maxDepth') ?? 0,
+    includeTests: config.get<boolean>('includeTests') ?? true,
+  };
+}
+
 async function resolveTarget(): Promise<string | undefined> {
   const editor = vscode.window.activeTextEditor;
   const selected = editor ? editor.document.getText(editor.selection).trim() : '';
@@ -341,6 +414,8 @@ async function pickChangedTarget(targets: ChangedJavaTarget[]): Promise<ChangedJ
 }
 
 class ImpactCodeLensProvider implements vscode.CodeLensProvider {
+  constructor(private readonly cache: ImpactGraphCache) {}
+
   async provideCodeLenses(document: vscode.TextDocument, token: vscode.CancellationToken): Promise<vscode.CodeLens[]> {
     const folder = vscode.workspace.getWorkspaceFolder(document.uri);
     if (!folder) return [];
@@ -355,15 +430,13 @@ class ImpactCodeLensProvider implements vscode.CodeLensProvider {
       if (token.isCancellationRequested) break;
       let title = 'Impact: show report';
       try {
-        const graph = await buildImpactGraph({
+        const result = await this.cache.getGraph({
           root,
           target: symbol.target,
           mode: 'patch-impact',
-          maxFiles: config.get<number>('maxFiles') ?? 0,
-          maxFileBytes: config.get<number>('maxFileBytes') ?? 300_000,
-          maxDepth: config.get<number>('maxDepth') ?? 0,
-          includeTests: config.get<boolean>('includeTests') ?? true,
+          ...currentAnalyzerOptions(document.uri),
         });
+        const graph = result.graph;
         title = impactLensTitle({
           endpoints: graph.summary.endpoints,
           tests: graph.summary.tests,

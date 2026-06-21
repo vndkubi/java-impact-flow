@@ -3,6 +3,7 @@ tests/**
 node_modules/**
 .ext-graph/**
 outputs/**
+validation/**
 .vscode/**
 .gitignore
 tsconfig.json

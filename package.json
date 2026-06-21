@@ -2,7 +2,7 @@
   "name": "java-impact-flow",
   "displayName": "Java Impact Flow",
   "description": "Visualize Java field, method, callback, API-flow impact, and suggested tests in VS Code.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "vndkubi",
   "type": "module",
   "main": "./dist/extension.js",
@@ -24,16 +24,42 @@
     "build": "tsc -p .",
     "lint": "tsc --noEmit -p .",
     "demo": "node dist/cli.js",
+    "validate:sample": "node dist/cli.js validate --suite validation/java-impact-flow.validation.json --out outputs/validation-report.json --markdown-out outputs/validation-report.md",
+    "benchmark:performance": "node dist/cli.js benchmark performance --root validation/fixtures/spring-orders --target OrderService.findOrders --mode patch-impact --cold-ms 500 --warm-ms 100 --min-trust-score 50 --max-unresolved-calls 2 --min-endpoints 1 --min-suggested-tests 1 --out outputs/performance-report.json",
     "test": "vitest run"
   },
   "activationEvents": [
     "onLanguage:java",
+    "onView:javaImpactFlowWorkbench",
     "onCommand:extGraph.showImpactGraph",
     "onCommand:extGraph.exportImpactGraph",
     "onCommand:extGraph.analyzeCurrentChanges",
-    "onCommand:extGraph.checkPatchRisk"
+    "onCommand:extGraph.staticDebugEndpoint",
+    "onCommand:extGraph.checkPatchRisk",
+    "onCommand:extGraph.refreshWorkbench",
+    "onCommand:extGraph.copyWorkbenchPrSummary",
+    "onCommand:extGraph.runWorkbenchTopTests",
+    "onCommand:extGraph.openWorkbenchRiskReport"
   ],
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "javaImpactFlow",
+          "title": "Java Impact Flow",
+          "icon": "assets/icon.png"
+        }
+      ]
+    },
+    "views": {
+      "javaImpactFlow": [
+        {
+          "id": "javaImpactFlowWorkbench",
+          "name": "Patch Risk Workbench",
+          "contextualTitle": "Java Impact Flow"
+        }
+      ]
+    },
     "commands": [
       {
         "command": "extGraph.showImpactGraph",
@@ -46,6 +72,11 @@
         "category": "Java Impact Flow"
       },
       {
+        "command": "extGraph.staticDebugEndpoint",
+        "title": "Java Impact Flow: Static Debug Endpoint",
+        "category": "Java Impact Flow"
+      },
+      {
         "command": "extGraph.checkPatchRisk",
         "title": "Java Impact Flow: Check Patch Risk",
         "category": "Java Impact Flow"
@@ -54,6 +85,30 @@
         "command": "extGraph.exportImpactGraph",
         "title": "Java Impact Flow: Export Impact Report",
         "category": "Java Impact Flow"
+      },
+      {
+        "command": "extGraph.refreshWorkbench",
+        "title": "Java Impact Flow: Refresh Workbench",
+        "category": "Java Impact Flow",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "extGraph.copyWorkbenchPrSummary",
+        "title": "Java Impact Flow: Copy Workbench PR Summary",
+        "category": "Java Impact Flow",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "extGraph.runWorkbenchTopTests",
+        "title": "Java Impact Flow: Run Workbench Top Tests",
+        "category": "Java Impact Flow",
+        "icon": "$(run)"
+      },
+      {
+        "command": "extGraph.openWorkbenchRiskReport",
+        "title": "Java Impact Flow: Open Workbench Risk Report",
+        "category": "Java Impact Flow",
+        "icon": "$(preview)"
       }
     ],
     "menus": {
@@ -64,19 +119,46 @@
           "group": "navigation@29"
         },
         {
-          "command": "extGraph.checkPatchRisk",
+          "command": "extGraph.staticDebugEndpoint",
           "when": "resourceLangId == java",
           "group": "navigation@30"
         },
         {
-          "command": "extGraph.showImpactGraph",
+          "command": "extGraph.checkPatchRisk",
           "when": "resourceLangId == java",
           "group": "navigation@31"
         },
         {
-          "command": "extGraph.exportImpactGraph",
+          "command": "extGraph.showImpactGraph",
           "when": "resourceLangId == java",
           "group": "navigation@32"
+        },
+        {
+          "command": "extGraph.exportImpactGraph",
+          "when": "resourceLangId == java",
+          "group": "navigation@33"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "extGraph.refreshWorkbench",
+          "when": "view == javaImpactFlowWorkbench",
+          "group": "navigation@1"
+        },
+        {
+          "command": "extGraph.openWorkbenchRiskReport",
+          "when": "view == javaImpactFlowWorkbench",
+          "group": "navigation@2"
+        },
+        {
+          "command": "extGraph.copyWorkbenchPrSummary",
+          "when": "view == javaImpactFlowWorkbench",
+          "group": "navigation@3"
+        },
+        {
+          "command": "extGraph.runWorkbenchTopTests",
+          "when": "view == javaImpactFlowWorkbench",
+          "group": "navigation@4"
         }
       ]
     },

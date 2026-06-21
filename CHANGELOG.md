@@ -1,5 +1,21 @@
 # Change Log
 
+## 0.1.2 - 2026-06-21
+
+- Added a validation pack runner for expected endpoint, suggested-test, trust,
+  and unresolved-call checks against Java sample workspaces.
+- Added `java-impact-flow validate` for JSON and Markdown validation scorecards.
+- Added `java-impact-flow risk` for CI-friendly patch risk reports with
+  pass/warn/fail exit-code behavior.
+- Added a native `Java Impact Flow` sidebar with patch risk, scan time, cache
+  hit/miss, trust, unresolved calls, endpoints, and suggested tests.
+- Added in-memory analyzer caching for repeated editor and CLI analysis.
+- Added `java-impact-flow benchmark performance` for cold/warm performance and
+  quality threshold gates.
+- Added a Static Debugger webview tab and command for stepping through possible
+  endpoint source paths with per-step explanations, confidence, source jumps,
+  and copyable traces.
+
 ## 0.1.0
 
 - Initial Java Impact Flow extension.

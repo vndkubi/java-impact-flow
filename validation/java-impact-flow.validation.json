@@ -1,0 +1,31 @@
+{
+  "name": "Java Impact Flow bundled validation",
+  "cases": [
+    {
+      "name": "spring-orders-service-impact",
+      "root": "fixtures/spring-orders",
+      "target": "OrderService.findOrders",
+      "mode": "patch-impact",
+      "expect": {
+        "endpoints": ["GET /orders"],
+        "testClasses": ["example.OrderControllerTest"],
+        "minTrustScore": 50,
+        "maxUnresolvedCalls": 2,
+        "minFlows": 1
+      }
+    },
+    {
+      "name": "jaxrs-admin-resource-impact",
+      "root": "fixtures/jaxrs-admin",
+      "target": "AdminUserResource",
+      "mode": "api-flow",
+      "expect": {
+        "endpoints": ["GET /admin/users/{id}", "POST /admin/users"],
+        "testClasses": ["example.AdminUserResourceTest"],
+        "minTrustScore": 50,
+        "maxUnresolvedCalls": 4,
+        "minFlows": 2
+      }
+    }
+  ]
+}

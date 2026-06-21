@@ -1,7 +1,16 @@
 import type { ImpactGraph } from './impactGraph.js';
+import { buildStaticDebugSessions } from './staticDebugger.js';
 
-export function renderImpactGraphHtml(graph: ImpactGraph): string {
+export type ImpactViewTab = 'sequence' | 'static-debug' | 'references' | 'graph';
+
+export interface RenderImpactGraphOptions {
+  initialTab?: ImpactViewTab;
+}
+
+export function renderImpactGraphHtml(graph: ImpactGraph, options: RenderImpactGraphOptions = {}): string {
   const data = safeJsonForHtml(graph);
+  const staticDebuggerData = safeJsonForHtml(buildStaticDebugSessions(graph));
+  const initialTab = safeJsonForHtml(options.initialTab ?? 'sequence');
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -303,6 +312,149 @@ export function renderImpactGraphHtml(graph: ImpactGraph): string {
     .action-btn.active { border-color: var(--target); color: var(--target); }
     .zoom-readout { min-width: 46px; color: var(--muted); font-size: 12px; text-align: center; }
     .sequence-stage { min-height: 0; flex: 1; display: flex; flex-direction: column; overflow: hidden; background: color-mix(in srgb, var(--bg) 90%, #000 10%); }
+    .debugger-stage {
+      min-height: 0;
+      flex: 1;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 330px;
+      overflow: hidden;
+      background: color-mix(in srgb, var(--bg) 92%, #000 8%);
+    }
+    .debugger-main {
+      min-width: 0;
+      min-height: 0;
+      overflow: auto;
+      padding: 16px;
+      background-image: radial-gradient(circle at 1px 1px, rgba(148, 163, 184, .14) 1px, transparent 0);
+      background-size: 24px 24px;
+    }
+    .debugger-card {
+      max-width: 880px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .debugger-card-head {
+      min-height: 54px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border);
+      background: var(--panel-2);
+    }
+    .debugger-step-num {
+      flex: none;
+      width: 38px;
+      height: 38px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--target) 18%, var(--panel-3) 82%);
+      color: var(--target);
+      font-size: 15px;
+      font-weight: 800;
+    }
+    .debugger-step-title { min-width: 0; flex: 1; }
+    .debugger-step-title strong { display: block; font-size: 15px; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .debugger-step-title span { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .debug-confidence {
+      flex: none;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 3px 8px;
+      font-size: 10px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+    }
+    .debug-confidence.high { color: var(--target); border-color: color-mix(in srgb, var(--target) 50%, var(--border) 50%); }
+    .debug-confidence.medium { color: #fde68a; border-color: rgba(245, 158, 11, .45); }
+    .debug-confidence.low { color: var(--danger); border-color: rgba(248, 113, 113, .55); }
+    .debugger-card-body { display: grid; gap: 12px; padding: 14px; }
+    .debugger-why {
+      border: 1px solid color-mix(in srgb, var(--target) 34%, var(--border) 66%);
+      border-radius: 7px;
+      background: color-mix(in srgb, var(--target) 8%, var(--panel-2) 92%);
+      padding: 10px;
+      color: var(--text);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    .debugger-code {
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: var(--panel-3);
+      color: var(--text);
+      padding: 10px;
+      font-family: var(--vscode-editor-font-family, ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace);
+      font-size: 12px;
+      line-height: 1.55;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .debugger-meta-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+    .debugger-meta {
+      min-width: 0;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: var(--panel-2);
+      padding: 8px;
+    }
+    .debugger-meta span { display: block; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }
+    .debugger-meta strong { display: block; margin-top: 4px; color: var(--text); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .debugger-warning {
+      border: 1px solid rgba(245, 158, 11, .38);
+      border-radius: 7px;
+      background: rgba(245, 158, 11, .08);
+      color: #fde68a;
+      padding: 9px 10px;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .debugger-timeline {
+      min-width: 0;
+      min-height: 0;
+      overflow: auto;
+      border-left: 1px solid var(--border);
+      background: var(--panel);
+      padding: 12px;
+    }
+    .debugger-timeline-list { display: grid; gap: 7px; }
+    .debugger-timeline-item {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: var(--panel-2);
+      color: var(--text);
+      text-align: left;
+      padding: 8px;
+      cursor: pointer;
+    }
+    .debugger-timeline-item:hover { border-color: var(--target); }
+    .debugger-timeline-item.active { border-color: var(--selected); box-shadow: inset 3px 0 0 var(--selected); }
+    .debugger-timeline-item.unresolved { border-color: rgba(248, 113, 113, .46); }
+    .debugger-timeline-top { display: flex; align-items: center; gap: 7px; min-width: 0; }
+    .debugger-timeline-index {
+      flex: none;
+      width: 22px;
+      height: 20px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 6px;
+      background: var(--panel-3);
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 800;
+    }
+    .debugger-timeline-kind { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
+    .debugger-timeline-title { margin-top: 5px; font-size: 12px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .debugger-timeline-loc { margin-top: 4px; color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .sequence-scroller {
       min-height: 0;
       flex: 1;
@@ -626,6 +778,7 @@ export function renderImpactGraphHtml(graph: ImpactGraph): string {
       <div class="top-stats" id="topStats"></div>
       <div class="tabs" aria-label="Impact views">
         <button class="tab active" data-tab="sequence">Sequence</button>
+        <button class="tab" data-tab="static-debug">Static Debug</button>
         <button class="tab" data-tab="references">References</button>
         <button class="tab" data-tab="graph">Graph</button>
       </div>
@@ -694,6 +847,27 @@ export function renderImpactGraphHtml(graph: ImpactGraph): string {
             <div id="quickRefsList" class="quick-refs-list"></div>
           </div>
         </section>
+        <section id="static-debug" class="view">
+          <div class="view-head">
+            <div class="view-title"><strong id="debugTitle">Static Debugger</strong><span id="debugMeta"></span></div>
+            <div class="toolbar-actions">
+              <button class="icon-btn" id="debugPrevStep" aria-label="Previous static debug step">-</button>
+              <span class="zoom-readout" id="debugStepReadout">0/0</span>
+              <button class="icon-btn" id="debugNextStep" aria-label="Next static debug step">+</button>
+              <button class="action-btn" id="debugOpenSource">Open Source</button>
+              <button class="action-btn" id="copyStaticDebugTrace">Copy Trace</button>
+            </div>
+          </div>
+          <div class="debugger-stage">
+            <div class="debugger-main">
+              <div id="debuggerCard" class="debugger-card"></div>
+            </div>
+            <aside class="debugger-timeline">
+              <div class="section-head"><h2>Debugger Timeline</h2><span class="count" id="debugTimelineCount"></span></div>
+              <div id="debugTimeline" class="debugger-timeline-list"></div>
+            </aside>
+          </div>
+        </section>
         <section id="references" class="view refs-view">
           <div class="refs-toolbar">
             <div class="search-row">
@@ -740,6 +914,8 @@ export function renderImpactGraphHtml(graph: ImpactGraph): string {
   </div>
   <script>
     const graph = ${data};
+    const staticDebuggerSessions = ${staticDebuggerData};
+    const initialTab = ${initialTab};
     const vscodeApi = typeof acquireVsCodeApi === 'function' ? acquireVsCodeApi() : null;
     const denseGraph = graph.nodes.length > 90 || graph.edges.length > 140;
     const colors = {
@@ -753,8 +929,9 @@ export function renderImpactGraphHtml(graph: ImpactGraph): string {
       annotation: 'var(--annotation)'
     };
     const state = {
-      activeTab: 'sequence',
+      activeTab: initialTab || 'sequence',
       activeFlow: 0,
+      activeDebugStep: 0,
       activeKind: 'all',
       activeMapFilter: null,
       selectedType: null,
@@ -783,7 +960,8 @@ export function renderImpactGraphHtml(graph: ImpactGraph): string {
     renderQuickReferences();
     renderSelected();
     renderSequence();
-    applyActiveTabLayout();
+    renderStaticDebugger();
+    setActiveTab(state.activeTab);
 
     function bindShell() {
       document.querySelectorAll('.tab').forEach(button => {
@@ -814,6 +992,15 @@ export function renderImpactGraphHtml(graph: ImpactGraph): string {
         drawGraph();
       };
       document.getElementById('redrawGraph').onclick = drawGraph;
+      document.getElementById('debugPrevStep').onclick = () => selectStaticDebugStep(state.activeDebugStep - 1);
+      document.getElementById('debugNextStep').onclick = () => selectStaticDebugStep(state.activeDebugStep + 1);
+      document.getElementById('debugOpenSource').onclick = () => {
+        const step = activeStaticDebugStep();
+        if (step) openLocation(step.file, step.line);
+      };
+      document.getElementById('copyStaticDebugTrace').onclick = async () => {
+        await copyText(staticDebugTraceMarkdown(activeStaticDebugSession()));
+      };
       window.addEventListener('resize', () => {
         if (state.activeTab === 'graph') drawGraph();
       });
@@ -827,6 +1014,7 @@ export function renderImpactGraphHtml(graph: ImpactGraph): string {
       applyActiveTabLayout();
       if (state.activeTab === 'graph') drawGraph();
       if (state.activeTab === 'sequence') renderSequence();
+      if (state.activeTab === 'static-debug') renderStaticDebugger();
       if (state.activeTab === 'references') renderReferences();
     }
 
@@ -991,9 +1179,11 @@ export function renderImpactGraphHtml(graph: ImpactGraph): string {
       list.querySelectorAll('[data-flow]').forEach(button => {
         button.onclick = () => {
           state.activeFlow = Number(button.dataset.flow || 0);
+          state.activeDebugStep = 0;
           clearSelection();
           renderFlowList();
           renderSequence();
+          renderStaticDebugger();
         };
       });
     }
@@ -1159,6 +1349,61 @@ export function renderImpactGraphHtml(graph: ImpactGraph): string {
 
     function diagCard(label, value) {
       return '<div class="diag-card"><span>' + escapeHtml(label) + '</span><strong>' + escapeHtml(value) + '</strong></div>';
+    }
+
+    function renderStaticDebugger() {
+      const session = activeStaticDebugSession();
+      const card = document.getElementById('debuggerCard');
+      const timeline = document.getElementById('debugTimeline');
+      if (!session || !session.steps.length) {
+        document.getElementById('debugTitle').textContent = 'Static Debugger';
+        document.getElementById('debugMeta').textContent = 'No endpoint flow was detected for this target.';
+        document.getElementById('debugStepReadout').textContent = '0/0';
+        document.getElementById('debugTimelineCount').textContent = '0 steps';
+        card.innerHTML =
+          '<div class="debugger-card-body">' +
+            '<div class="debugger-warning">Static Debugger needs an endpoint flow. Try api-flow or patch-impact on a controller/resource target.</div>' +
+          '</div>';
+        timeline.innerHTML = '<div class="empty">No static debug timeline.</div>';
+        return;
+      }
+      state.activeDebugStep = Math.max(0, Math.min(state.activeDebugStep, session.steps.length - 1));
+      const step = session.steps[state.activeDebugStep];
+      document.getElementById('debugTitle').textContent = 'Static Debugger';
+      document.getElementById('debugMeta').textContent = session.label + ' | ' + session.summary.totalSteps + ' steps | ' + session.summary.unresolvedSteps + ' unresolved';
+      document.getElementById('debugStepReadout').textContent = step.index + '/' + session.steps.length;
+      document.getElementById('debugTimelineCount').textContent = session.steps.length + ' steps';
+      card.innerHTML =
+        '<div class="debugger-card-head">' +
+          '<span class="debugger-step-num">' + step.index + '</span>' +
+          '<div class="debugger-step-title"><strong>' + escapeHtml(step.title) + '</strong><span>' + escapeHtml(step.file) + ':' + step.line + '</span></div>' +
+          '<span class="debug-confidence ' + escapeHtml(step.confidenceLabel) + '">' + escapeHtml(step.confidenceLabel) + ' ' + Math.round(step.confidence * 100) + '%</span>' +
+        '</div>' +
+        '<div class="debugger-card-body">' +
+          '<div class="debugger-warning">' + escapeHtml(session.summary.staticWarning) + '</div>' +
+          '<div class="debugger-why"><strong>Why:</strong> ' + escapeHtml(step.why) + '</div>' +
+          '<div class="debugger-meta-grid">' +
+            debugMeta('Kind', step.kind) +
+            debugMeta('Status', step.status) +
+            debugMeta('Depth', step.depth) +
+            debugMeta('Target', step.target || '-') +
+          '</div>' +
+          (step.code ? '<div class="debugger-code">' + escapeHtml(step.code) + '</div>' : '') +
+        '</div>';
+      timeline.innerHTML = session.steps.map((item, index) =>
+        '<button class="debugger-timeline-item ' + (index === state.activeDebugStep ? 'active ' : '') + (item.status === 'unresolved' ? 'unresolved' : '') + '" data-debug-step="' + index + '">' +
+          '<div class="debugger-timeline-top"><span class="debugger-timeline-index">' + item.index + '</span><span class="debugger-timeline-kind">' + escapeHtml(item.kind) + '</span></div>' +
+          '<div class="debugger-timeline-title">' + escapeHtml(item.title) + '</div>' +
+          '<div class="debugger-timeline-loc">' + escapeHtml(shortFile(item.file)) + ':' + item.line + '</div>' +
+        '</button>'
+      ).join('');
+      timeline.querySelectorAll('[data-debug-step]').forEach(button => {
+        button.onclick = () => selectStaticDebugStep(Number(button.dataset.debugStep || 0));
+      });
+    }
+
+    function debugMeta(label, value) {
+      return '<div class="debugger-meta"><span>' + escapeHtml(label) + '</span><strong title="' + escapeHtml(value) + '">' + escapeHtml(value) + '</strong></div>';
     }
 
     function sequenceModel(flow) {
@@ -1818,6 +2063,22 @@ export function renderImpactGraphHtml(graph: ImpactGraph): string {
       if (!step) return;
       state.selectedType = 'step';
       state.selectedId = step.id;
+      const debugIndex = (activeStaticDebugSession()?.steps || []).findIndex(item => item.flowStepId === step.id);
+      if (debugIndex >= 0) state.activeDebugStep = debugIndex;
+      renderSelected();
+      renderFlowSteps(activeFlow());
+      drawSequence(activeFlow());
+      renderStaticDebugger();
+    }
+
+    function selectStaticDebugStep(index) {
+      const session = activeStaticDebugSession();
+      if (!session || !session.steps.length) return;
+      state.activeDebugStep = Math.max(0, Math.min(Number(index) || 0, session.steps.length - 1));
+      const step = session.steps[state.activeDebugStep];
+      state.selectedType = 'step';
+      state.selectedId = step.flowStepId;
+      renderStaticDebugger();
       renderSelected();
       renderFlowSteps(activeFlow());
       drawSequence(activeFlow());
@@ -1954,6 +2215,35 @@ export function renderImpactGraphHtml(graph: ImpactGraph): string {
 
     function activeFlow() {
       return (graph.flows || [])[state.activeFlow];
+    }
+
+    function activeStaticDebugSession() {
+      return (staticDebuggerSessions || [])[state.activeFlow];
+    }
+
+    function activeStaticDebugStep() {
+      return activeStaticDebugSession()?.steps?.[state.activeDebugStep];
+    }
+
+    function staticDebugTraceMarkdown(session) {
+      if (!session) return 'Static Debugger: no endpoint flow selected.';
+      const lines = [
+        'Static Debug: ' + session.label,
+        session.summary.staticWarning,
+        '',
+        'Steps: ' + session.summary.totalSteps,
+        'Resolved: ' + session.summary.resolvedSteps,
+        'Unresolved: ' + session.summary.unresolvedSteps,
+        'Control markers: ' + session.summary.controlMarkers,
+        ''
+      ];
+      (session.steps || []).forEach(step => {
+        lines.push(step.index + '. ' + step.title);
+        lines.push('   ' + step.file + ':' + step.line);
+        lines.push('   Why: ' + step.why);
+        if (step.code) lines.push('   Code: ' + step.code);
+      });
+      return lines.join('\\n');
     }
 
     function svgEl(name, attrs) {

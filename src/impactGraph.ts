@@ -237,7 +237,6 @@ const DEFAULT_MAX_DEPTH = FULL_FLOW_DEPTH_LIMIT;
 
 const IGNORED_DIRS = new Set([
   '.git',
-  '.codegraph',
   '.gradle',
   '.idea',
   '.idx',
@@ -335,6 +334,27 @@ const JUNIT_ANNOTATIONS = new Set([
   'Test',
 ]);
 
+interface ProjectScanCacheEntry {
+  root: string;
+  facts: JavaFileFacts[];
+  skippedLargeFiles: number;
+  truncated: boolean;
+  buildSystem: ProjectBuildSystem;
+}
+
+const PROJECT_SCAN_CACHE = new Map<string, ProjectScanCacheEntry>();
+
+export function clearImpactGraphAnalyzerCache(root?: string): void {
+  if (!root) {
+    PROJECT_SCAN_CACHE.clear();
+    return;
+  }
+  const normalizedRoot = path.resolve(root);
+  for (const [key, entry] of PROJECT_SCAN_CACHE) {
+    if (entry.root === normalizedRoot) PROJECT_SCAN_CACHE.delete(key);
+  }
+}
+
 export async function buildImpactGraph(options: BuildImpactGraphOptions): Promise<ImpactGraph> {
   const root = path.resolve(options.root);
   const target = normalizeTarget(options.target);
@@ -345,24 +365,13 @@ export async function buildImpactGraph(options: BuildImpactGraphOptions): Promis
   const maxEdges = clampInt(options.maxEdges ?? DEFAULT_MAX_EDGES, 20, 5000);
   const maxDepth = clampLimit(options.maxDepth, DEFAULT_MAX_DEPTH, 1, FULL_FLOW_DEPTH_LIMIT, FULL_FLOW_DEPTH_LIMIT);
   const includeTests = options.includeTests ?? true;
-  const discovered = listJavaFiles(root, { maxFiles, includeTests });
-  const facts: JavaFileFacts[] = [];
-  let skippedLargeFiles = 0;
-
-  for (const file of discovered.files) {
-    const stat = fs.statSync(file.absPath);
-    if (stat.size > maxFileBytes) {
-      skippedLargeFiles++;
-      continue;
-    }
-    facts.push(parseJavaFile(root, file.absPath));
-  }
+  const projectScan = getProjectScan(root, { maxFiles, maxFileBytes, includeTests });
+  const facts = projectScan.facts;
 
   const allSymbols = facts.flatMap(file => [...file.classes, ...file.methods, ...file.fields]);
   const definitions = allSymbols.filter(symbol => symbolMatchesTarget(symbol, target));
   const references = findReferences(facts, definitions, target);
   const relatedEndpoints = findRelatedEndpoints(facts, target, definitions, references);
-  const buildSystem = detectBuildSystem(root);
   const graph = assembleGraph({
     root,
     target,
@@ -375,11 +384,57 @@ export async function buildImpactGraph(options: BuildImpactGraphOptions): Promis
     maxEdges,
     maxDepth,
     maxFiles,
-    skippedLargeFiles,
-    buildSystem,
-    truncated: discovered.truncated,
+    skippedLargeFiles: projectScan.skippedLargeFiles,
+    buildSystem: projectScan.buildSystem,
+    truncated: projectScan.truncated,
   });
   return graph;
+}
+
+function getProjectScan(root: string, options: {
+  maxFiles: number;
+  maxFileBytes: number;
+  includeTests: boolean;
+}): ProjectScanCacheEntry {
+  const cacheKey = projectScanCacheKey(root, options);
+  const cached = PROJECT_SCAN_CACHE.get(cacheKey);
+  if (cached) return cached;
+
+  const discovered = listJavaFiles(root, { maxFiles: options.maxFiles, includeTests: options.includeTests });
+  const facts: JavaFileFacts[] = [];
+  let skippedLargeFiles = 0;
+
+  for (const file of discovered.files) {
+    const stat = fs.statSync(file.absPath);
+    if (stat.size > options.maxFileBytes) {
+      skippedLargeFiles++;
+      continue;
+    }
+    facts.push(parseJavaFile(root, file.absPath));
+  }
+
+  const entry = {
+    root,
+    facts,
+    skippedLargeFiles,
+    truncated: discovered.truncated,
+    buildSystem: detectBuildSystem(root),
+  };
+  PROJECT_SCAN_CACHE.set(cacheKey, entry);
+  return entry;
+}
+
+function projectScanCacheKey(root: string, options: {
+  maxFiles: number;
+  maxFileBytes: number;
+  includeTests: boolean;
+}): string {
+  return JSON.stringify({
+    root,
+    maxFiles: options.maxFiles,
+    maxFileBytes: options.maxFileBytes,
+    includeTests: options.includeTests,
+  });
 }
 
 function listJavaFiles(root: string, options: { maxFiles: number; includeTests: boolean }): {
@@ -402,7 +457,7 @@ function listJavaFiles(root: string, options: { maxFiles: number; includeTests: 
     for (const entry of entries) {
       const absPath = path.join(current, entry.name);
       if (entry.isDirectory()) {
-        if (!IGNORED_DIRS.has(entry.name)) stack.push(absPath);
+        if (shouldScanDirectory(entry.name)) stack.push(absPath);
         continue;
       }
       if (!entry.isFile() || !entry.name.endsWith('.java')) continue;
@@ -1918,7 +1973,7 @@ function buildWarnings(input: {
   truncated: boolean;
 }, nodeCount: number, edgeCount: number): string[] {
   const warnings: string[] = [
-    'Static prototype output is regex-based; use JDT LS or CodeGraph indexed facts for production precision.',
+    'Static prototype output is regex-based; use JDT LS or another semantic Java index for production precision.',
   ];
   if (input.definitions.length === 0) warnings.push('No exact definition matched the target; graph is reference-only.');
   if (input.references.length === 0) warnings.push('No references matched the target in the scanned Java file set.');
@@ -2081,6 +2136,11 @@ function filePriorityScore(file: string, isTest: boolean): number {
 
 function isTestPath(file: string): boolean {
   return /(^|\/)(src\/test|test|tests|it|integrationTest)(\/|$)/i.test(file) || /(?:Test|Tests|IT)\.java$/.test(file);
+}
+
+function shouldScanDirectory(name: string): boolean {
+  if (IGNORED_DIRS.has(name)) return false;
+  return !name.startsWith('.');
 }
 
 function symbolNode(symbol: JavaSymbol): GraphNode {

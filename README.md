@@ -13,12 +13,13 @@ Repository name: `java-impact-flow`
 
 This extension is an early preview. It scans source files locally with bounded
 regex-based Java parsing. For production-grade precision, the data provider
-should later be backed by JDT LS, CodeGraph indexed facts, or another semantic
-Java index.
+should later be backed by JDT LS or another semantic Java index.
 
 ## What It Shows
 
 - API flows for Spring MVC and Jakarta/JAX-RS controllers.
+- A Static Debugger tab that lets you step through possible endpoint source
+  paths without running the Java app.
 - Field, method, class, and callback references with source lines.
 - Impact map grouped by entrypoints, production files, tests, callbacks, and
   framework annotations.
@@ -34,6 +35,14 @@ Java index.
 - A patch risk gate for changed Java code with pass/warn/fail, impacted
   endpoints, suggested tests, trust, and unresolved-call risk.
 - "Why this test?" explanations and copyable PR impact summaries.
+- A validation pack runner that checks expected endpoints, suggested tests,
+  trust score, and unresolved-call thresholds against Java sample workspaces.
+- A CI-friendly patch risk CLI that writes Markdown/JSON and returns a failing
+  exit code when the configured risk threshold is crossed.
+- A `Java Impact Flow` sidebar with patch risk, scan time, cache hit/miss,
+  trust, unresolved calls, endpoints, and suggested tests.
+- A performance benchmark gate that checks cold scan time, warm cache time,
+  trust, unresolved calls, endpoint count, and suggested-test count.
 
 ## Requirements
 
@@ -68,6 +77,10 @@ passing.
    `Java Impact Flow: Analyze Current Changes`.
 8. To get a commit/PR-oriented risk decision, run:
    `Java Impact Flow: Check Patch Risk`.
+9. Open the `Java Impact Flow` Activity Bar item and refresh
+   `Patch Risk Workbench` for a persistent sidebar view.
+10. To step through a possible endpoint source path, run:
+    `Java Impact Flow: Static Debug Endpoint`.
 
 The webview opens beside the editor. Reference rows include an `Open` action
 that jumps back to the source line. Suggested tests include `Run`, `Copy`, and
@@ -91,6 +104,49 @@ After packaging or linking the binary, the equivalent command is:
 java-impact-flow --root <java-workspace> --target OrderService --mode patch-impact --max-files 0 --max-depth 0 --out .ext-graph\OrderService.impact.json --html-out .ext-graph\OrderService.impact.html
 ```
 
+### CI Patch Risk Gate
+
+Use `risk` to turn the VS Code patch-risk workflow into a terminal gate. It
+reads changed Java files from Git status and diff, builds patch-impact graphs,
+then writes a PR-ready Markdown summary.
+
+```powershell
+java-impact-flow risk --root <java-workspace> --changed --fail-on fail --out .ext-graph\risk.md --json-out .ext-graph\risk.json
+```
+
+`--fail-on fail` exits non-zero only for `FAIL`. Use `--fail-on warn` when a
+medium-trust or unresolved-call report should also block CI. Use
+`--fail-on never` to collect advisory output without failing the job.
+
+### Validation Pack
+
+Use `validate` to run expected-output checks against Java sample workspaces. A
+suite is a JSON file containing cases with a workspace root, target symbol, mode,
+and expected endpoints/tests/trust thresholds.
+
+```powershell
+npm.cmd run build
+node dist/cli.js validate --suite validation\java-impact-flow.validation.json --out outputs\validation-report.json --markdown-out outputs\validation-report.md
+```
+
+The bundled suite currently covers Spring MVC and Jakarta/JAX-RS fixtures. It
+fails if an expected endpoint or suggested test disappears, if trust drops below
+the configured threshold, or if unresolved calls exceed the allowed maximum.
+
+### Performance Gate
+
+Use `benchmark performance` to prove the analyzer stays fast enough for the
+editor workflow. It runs the target once cold and once warm through the cache,
+then fails the process when any configured threshold is crossed.
+
+```powershell
+npm.cmd run build
+node dist/cli.js benchmark performance --root validation\fixtures\spring-orders --target OrderService.findOrders --mode patch-impact --cold-ms 500 --warm-ms 100 --min-trust-score 50 --max-unresolved-calls 2 --min-endpoints 1 --min-suggested-tests 1 --out outputs\performance-report.json
+```
+
+`coldMs` measures the first analyzer run in the current process. `warmMs`
+measures a repeated request for the same target through the in-memory cache.
+
 ### CLI Options
 
 | Option | Required | Default | Description |
@@ -105,6 +161,40 @@ java-impact-flow --root <java-workspace> --target OrderService --mode patch-impa
 | `--max-depth <n>` | no | `0` | Recursive endpoint/callback flow depth. `0` traces full depth up to the `20`-level safety cap. |
 | `--no-tests` | no | tests included | Exclude test files from evidence. |
 
+### Risk CLI Options
+
+| Option | Required | Default | Description |
+| --- | --- | --- | --- |
+| `--root <path>` | yes | none | Java workspace root and Git repository to inspect. |
+| `--changed` | no | enabled | Accepted for readability; risk mode always reads changed Java files. |
+| `--out <file>` | no | none | Write patch risk Markdown. |
+| `--json-out <file>` | no | none | Write patch risk JSON. |
+| `--fail-on <level>` | no | `fail` | One of `never`, `fail`, or `warn`. |
+| `--max-targets <n>` | no | `12` | Maximum changed Java targets to analyze. |
+
+### Validation CLI Options
+
+| Option | Required | Default | Description |
+| --- | --- | --- | --- |
+| `--suite <file>` | yes | none | Validation suite JSON. |
+| `--out <file>` | no | none | Write validation result JSON. |
+| `--markdown-out <file>` | no | none | Write validation scorecard Markdown. |
+
+### Performance CLI Options
+
+| Option | Required | Default | Description |
+| --- | --- | --- | --- |
+| `--root <path>` | yes | none | Java workspace root to scan. |
+| `--target <symbol>` | yes | none | Class, method, field, or qualified symbol to benchmark. |
+| `--mode <mode>` | no | `patch-impact` | One of `references`, `call`, `api-flow`, or `patch-impact`. |
+| `--out <file>` | no | none | Write performance benchmark JSON. |
+| `--cold-ms <n>` | no | none | Fail if the cold run is slower than this threshold. |
+| `--warm-ms <n>` | no | none | Fail if the warm cache run is slower than this threshold. |
+| `--min-trust-score <n>` | no | none | Fail if trust score is lower than this threshold. |
+| `--max-unresolved-calls <n>` | no | none | Fail if unresolved calls exceed this threshold. |
+| `--min-endpoints <n>` | no | none | Fail if fewer endpoints are detected. |
+| `--min-suggested-tests <n>` | no | none | Fail if fewer suggested tests are detected. |
+
 ## Modes
 
 | Mode | Use When | Primary View |
@@ -118,9 +208,20 @@ java-impact-flow --root <java-workspace> --target OrderService --mode patch-impa
 infer changed Java classes or methods, then opens `patch-impact` for the selected
 changed symbol.
 
+The Static Debugger tab turns endpoint flow evidence into a debugger-style
+timeline. It supports next/previous step controls, source jumps, confidence
+labels, per-step "Why" explanations, and copyable trace text. It is intentionally
+static: it shows possible source flow, not one measured runtime scenario.
+
 Inline CodeLens entries are shown on Java class and method declarations with
 counts such as `Impact: 3 endpoints | 7 tests | 12 refs`. Clicking the CodeLens
 opens the corresponding patch-impact view.
+
+The `Java Impact Flow` sidebar shows the same patch-risk signal as a native
+Tree View. It displays `Patch Risk`, scan time, Java files scanned, cache
+hit/miss count, trust score, unresolved calls, changed targets, impacted
+endpoints, suggested tests, and risk reasons. Title actions refresh the
+workbench, open the full risk report, copy the PR summary, or run the top tests.
 
 The Trust Score panel includes `Publish Diagnostics`, which adds low-confidence
 unresolved call/callback steps to the VS Code Problems panel on demand.
@@ -187,6 +288,8 @@ npm.cmd install
 npm.cmd run lint
 npm.cmd test
 npm.cmd run build
+npm.cmd run validate:sample
+npm.cmd run benchmark:performance
 ```
 
 Useful files:
@@ -195,6 +298,13 @@ Useful files:
 - `src/impactGraph.ts` - static Java analyzer and graph schema.
 - `src/render.ts` - standalone HTML/webview renderer.
 - `src/cli.ts` - headless CLI entrypoint.
+- `src/impactCache.ts` - in-memory impact graph cache.
+- `src/performance.ts` - cold/warm analyzer performance benchmark gate.
+- `src/riskReport.ts` - pass/warn/fail patch risk report logic.
+- `src/riskWorkbench.ts` - native VS Code sidebar Tree View provider.
+- `src/staticDebugger.ts` - debugger-style static endpoint flow sessions.
+- `src/validation.ts` - expected-output validation suite runner.
+- `validation/java-impact-flow.validation.json` - bundled Java validation suite.
 - `tests/impactGraph.test.ts` - analyzer and renderer coverage.
 
 ## Release Checklist
@@ -205,6 +315,8 @@ For maintainers preparing a Marketplace release:
 - Decide whether to rename command IDs from `extGraph.*` to
   `javaImpactFlow.*`; keep the old IDs as aliases if existing users matter.
 - Package locally with `vsce package` and test the generated `.vsix`.
+- Run `npm.cmd run validate:sample` and inspect the generated Markdown
+  scorecard before publishing behavior claims.
 - Confirm the README screenshots and examples match the packaged extension.
 
 ## Troubleshooting
