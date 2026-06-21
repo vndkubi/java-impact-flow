@@ -4,6 +4,7 @@ import type { BuildImpactGraphOptions, ImpactGraph } from './impactGraph.js';
 import { ImpactGraphCache } from './impactCache.js';
 import { buildWorkbenchItems, type PatchRiskWorkbenchSnapshot, type WorkbenchModelItem } from './riskWorkbenchModel.js';
 import { buildPatchRiskReport, type PatchRiskReport } from './riskReport.js';
+import { TEST_COMMAND_BATCH_LIMIT, runNormalizedTestCommands } from './testCommandRunner.js';
 
 export type AnalyzerOptions = Omit<BuildImpactGraphOptions, 'root' | 'target' | 'mode'>;
 
@@ -138,12 +139,12 @@ export class RiskWorkbenchProvider implements vscode.TreeDataProvider<RiskWorkbe
       vscode.window.showInformationMessage('Java Impact Flow has no suggested tests to run yet.');
       return;
     }
-    const commands = [...new Set(this.snapshot.report.topTests.map(test => test.command))].slice(0, 3);
-    if (commands.length === 0) {
+    const commands = this.snapshot.report.topTests.map(test => test.command);
+    const count = runNormalizedTestCommands(workspace, commands, this.options.runTestCommand, TEST_COMMAND_BATCH_LIMIT);
+    if (count === 0) {
       vscode.window.showInformationMessage('Java Impact Flow has no suggested tests to run yet.');
       return;
     }
-    for (const command of commands) this.options.runTestCommand(workspace, command);
   }
 
   openRiskReport(): void {

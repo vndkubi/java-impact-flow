@@ -98,6 +98,19 @@ The CLI uses the same analyzer and renderer as the VS Code webview.
 node dist/cli.js --root <java-workspace> --target OrderService --mode patch-impact --max-files 0 --max-depth 0 --out outputs\order-service-patch-impact.json --html-out outputs\order-service-patch-impact.html
 ```
 
+Print your currently installed CLI version:
+
+```powershell
+java-impact-flow --version
+```
+
+Show command-specific help:
+
+```powershell
+java-impact-flow help risk
+java-impact-flow --help validate
+```
+
 After packaging or linking the binary, the equivalent command is:
 
 ```powershell
@@ -117,6 +130,17 @@ java-impact-flow risk --root <java-workspace> --changed --fail-on fail --out .ex
 `--fail-on fail` exits non-zero only for `FAIL`. Use `--fail-on warn` when a
 medium-trust or unresolved-call report should also block CI. Use
 `--fail-on never` to collect advisory output without failing the job.
+
+### Release Commands
+
+Use `release` for machine-safe publish gates:
+
+```powershell
+java-impact-flow release check --json --contract .ext-graph\release-check.json
+java-impact-flow release ci --json --contract .ext-graph\release-check-ci.json
+java-impact-flow release publish --allow-existing --skip-duplicate --json
+java-impact-flow release publish --dry-run --skip-duplicate --json --contract .ext-graph\release-dry-run.json
+```
 
 ### Validation Pack
 
@@ -152,7 +176,7 @@ measures a repeated request for the same target through the in-memory cache.
 | Option | Required | Default | Description |
 | --- | --- | --- | --- |
 | `--root <path>` | yes | none | Java workspace root to scan. |
-| `--target <symbol>` | yes | none | Class, method, field, or qualified symbol to inspect. |
+| `--target <symbol>` | yes | none | Class, method, field, or qualified symbol to inspect. Alias: `--symbol`. |
 | `--mode <mode>` | no | `references` | One of `references`, `call`, `api-flow`, or `patch-impact`. |
 | `--out <file>` | no | none | Write graph JSON. |
 | `--html-out <file>` | no | none | Write standalone HTML report. |
@@ -178,7 +202,7 @@ measures a repeated request for the same target through the in-memory cache.
 | --- | --- | --- | --- |
 | `--suite <file>` | yes | none | Validation suite JSON. |
 | `--out <file>` | no | none | Write validation result JSON. |
-| `--markdown-out <file>` | no | none | Write validation scorecard Markdown. |
+| `--markdown-out <file>` | no | none | Write validation scorecard Markdown. Alias: `--md-out`. |
 
 ### Performance CLI Options
 
@@ -290,6 +314,7 @@ npm.cmd test
 npm.cmd run build
 npm.cmd run validate:sample
 npm.cmd run benchmark:performance
+npm.cmd run release:verify
 ```
 
 Useful files:
@@ -314,10 +339,195 @@ For maintainers preparing a Marketplace release:
 - Add an icon and screenshots for the Marketplace page.
 - Decide whether to rename command IDs from `extGraph.*` to
   `javaImpactFlow.*`; keep the old IDs as aliases if existing users matter.
-- Package locally with `vsce package` and test the generated `.vsix`.
+- Run `npm.cmd run release:check` to validate version/manifest consistency and
+  Marketplace version safety before publishing.
+- Run `npm.cmd run release:check:ci` to validate both Marketplace state (without
+  querying latest versions) and VSIX smoke checks in machine-readable form.
+- For CI pipelines, pass `--json` to get machine-readable output:
+  `{"ok":true,...}` when checks pass, and `{"ok":false,"error":"..."}` when
+  blocked (including missing `.vsix` or duplicate version errors). A blocked check
+  returns a non-zero exit code.
+- Write a single release contract with `--contract <path>` to persist the exact JSON
+  payload emitted by `--json`. It now includes `packageHash` (SHA-256) for
+  immutable artifact audit across CI and human approvals.
+- Run `npm.cmd run release:verify` for the full local release gate:
+  lint/tests/build/validation/performance/package + VSIX smoke check.
+- `VSIX_SMOKE_REPORT` can be set to capture smoke check JSON output
+  (`npm.cmd run smoke:vsix -- --json --report path.json`), which CI uses
+  as an artifact.
+- `VSIX_SMOKE_MAX_SIZE_BYTES` (or `--max-size`) controls the smoke check package
+  size limit; by default this is 20MB. CI currently enforces 10MB.
+- `VSIX_SMOKE_MAX_ENTRIES` (or `--max-entries`) controls the maximum
+  number of entries in `.vsix`; by default this is 120. CI currently enforces 120.
+- Run `npm.cmd run smoke:vsix` to validate the packaged artifact files and confirm
+  no forbidden source directories leak into the `.vsix`.
 - Run `npm.cmd run validate:sample` and inspect the generated Markdown
   scorecard before publishing behavior claims.
 - Confirm the README screenshots and examples match the packaged extension.
+
+Recommended shortcuts:
+
+- `npm.cmd run release:check:json`: validate package existence and marketplace state
+  in machine-readable form.
+- `npm.cmd run release:check:ci`: same as above but skip marketplace lookup for CI speed.
+- `npm.cmd run release:publish:json`: same as `release:publish`, with JSON output.
+- `npm.cmd run release:publish:dry-run`: full release verification + publish-mode
+  validation without sending to Marketplace.
+
+### CI Example
+
+Use this pattern for release gates in GitHub Actions. The publish job reads the
+hash from `release-check` output and passes it explicitly with
+`--expected-package-hash` so the package is verified before publish:
+
+```yaml
+name: Release Health
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      run_publish:
+        description: "Run actual Marketplace publish (requires VSCE_PAT)"
+        required: false
+        default: false
+        type: boolean
+      allow_existing:
+        description: "Allow republish when version already exists"
+        required: false
+        default: false
+        type: boolean
+      skip_duplicate:
+        description: "Pass --skip-duplicate to vsce publish"
+        required: false
+        default: true
+        type: boolean
+
+jobs:
+  release-check:
+    name: Release Check
+    runs-on: ubuntu-latest
+    outputs:
+      package_hash: ${{ steps.release-check-contract.outputs.package_hash }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - run: npm ci
+      - run: npm run release:verify
+      - name: Check release JSON contract
+        id: release-check-contract
+        env:
+          RELEASE_CHECK_JSON: release-check.json
+        run: |
+          set -o pipefail
+          if ! npm run release:check:ci -- --contract "$RELEASE_CHECK_JSON"; then
+            echo "release:check failed";
+            exit 1;
+          fi
+          node - <<'NODE'
+            const fs = require('fs');
+            const raw = fs.readFileSync(process.env.RELEASE_CHECK_JSON, 'utf8').trim();
+            if (!raw) {
+              throw new Error('release check contract is empty');
+            }
+            const payload = JSON.parse(raw);
+            if (payload.ok !== true) {
+              throw new Error(payload.error ?? 'release:check failed');
+            }
+            if (!payload.smokeCheck || payload.smokeCheck.ok !== true) {
+              throw new Error(`release check smoke gate failed for ${payload.packagePath}`);
+            }
+            if (!payload.packageHash) {
+              throw new Error('release:check contract is missing packageHash');
+            }
+            console.log(`release:check ok for ${payload.manifest.name}@${payload.manifest.version} (${payload.packageHash})`);
+            const outputFile = process.env.GITHUB_OUTPUT;
+            if (outputFile) {
+              fs.appendFileSync(outputFile, `package_hash=${payload.packageHash}\n`);
+            }
+          NODE
+      - name: Upload release check contract
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-check-contract
+          path: release-check.json
+          if-no-files-found: error
+
+  release-publish:
+    name: Publish to Marketplace
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_publish == true
+    runs-on: ubuntu-latest
+    needs: release-check
+    env:
+      VSCE_PAT: ${{ secrets.VSCE_PAT }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - run: npm ci
+      - name: Guard and publish
+        env:
+          RELEASE_PUBLISH_JSON: release-publish.json
+          RELEASE_EXPECTED_PACKAGE_HASH: ${{ needs.release-check.outputs.package_hash }}
+        run: |
+          set -o pipefail
+          if [ -z "$VSCE_PAT" ]; then
+            echo "VSCE_PAT secret is required for publish";
+            exit 1;
+          fi
+          PUBLISH_ARGS="--json"
+          if [ "${{ github.event.inputs.allow_existing }}" = "true" ] || [ "${{ github.event.inputs.allow_existing }}" = "True" ]; then
+            PUBLISH_ARGS="$PUBLISH_ARGS --allow-existing";
+          fi
+          if [ "${{ github.event.inputs.skip_duplicate }}" != "false" ] && [ "${{ github.event.inputs.skip_duplicate }}" != "False" ]; then
+            PUBLISH_ARGS="$PUBLISH_ARGS --skip-duplicate";
+          fi
+          if [ -n "$RELEASE_EXPECTED_PACKAGE_HASH" ]; then
+            PUBLISH_ARGS="$PUBLISH_ARGS --expected-package-hash $RELEASE_EXPECTED_PACKAGE_HASH"
+          fi
+          PUBLISH_ARGS="$PUBLISH_ARGS --smoke --contract $RELEASE_PUBLISH_JSON"
+
+          if ! npm run release:publish:json -- $PUBLISH_ARGS; then
+            echo "release:publish failed";
+            exit 1;
+          fi
+          node - <<'NODE'
+            const fs = require('fs');
+            const raw = fs.readFileSync(process.env.RELEASE_PUBLISH_JSON, 'utf8').trim();
+            if (!raw) {
+              throw new Error('release publish contract is empty');
+            }
+            const payload = JSON.parse(raw);
+            if (payload.ok !== true) {
+              throw new Error(payload.error ?? 'release:publish failed');
+            }
+            if (!payload.smokeCheck || payload.smokeCheck.ok !== true) {
+              throw new Error(`release publish smoke gate failed for ${payload.packagePath}`);
+            }
+            if (payload.published !== true) {
+              throw new Error('release:publish did not execute publish step');
+            }
+            if (payload.packageHash) {
+              console.log(`release:publish succeeded for ${payload.manifest.name}@${payload.manifest.version} (${payload.packageHash})`);
+            } else {
+              console.log(`release:publish succeeded for ${payload.manifest.name}@${payload.manifest.version}`);
+            }
+          NODE
+      - name: Upload release publish contract
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-publish-contract
+          path: release-publish.json
+          if-no-files-found: error
+```
 
 ## Troubleshooting
 

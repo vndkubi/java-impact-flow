@@ -16,6 +16,16 @@ export interface ImpactLensCounts {
   references: number;
 }
 
+interface JavaClassScope {
+  name: string;
+  endLine: number;
+}
+
+interface NonCodeScanState {
+  inBlockComment: boolean;
+  inTextBlock: boolean;
+}
+
 const CONTROL_KEYWORDS = new Set([
   'catch',
   'for',
@@ -30,25 +40,38 @@ const CONTROL_KEYWORDS = new Set([
 export function findJavaSourceSymbols(file: string, content: string): JavaSourceSymbol[] {
   const lines = content.split(/\r?\n/);
   const symbols: JavaSourceSymbol[] = [];
-  let currentClass: string | undefined;
+  const classScopes: JavaClassScope[] = [];
+  const fileEndLine = lastNonEmptyLine(lines);
+  let scanState: NonCodeScanState = { inBlockComment: false, inTextBlock: false };
 
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index] ?? '';
     const lineNo = index + 1;
-    const classMatch = line.match(/\b(class|interface|enum|record)\s+([A-Za-z_$][\w$]*)\b/);
-    if (classMatch) {
-      currentClass = classMatch[2];
-      symbols.push({
-        target: currentClass ?? path.posix.basename(file, '.java'),
-        name: currentClass ?? path.posix.basename(file, '.java'),
-        file,
-        line: lineNo,
-        endLine: lines.length,
-        kind: 'class',
-      });
+    const stripped = stripNonCodeForBraceScan(line, scanState);
+    scanState = stripped.state;
+    const codeLine = stripped.code;
+
+    while (classScopes.length > 0 && classScopes[classScopes.length - 1]!.endLine < lineNo) {
+      classScopes.pop();
     }
 
-    if (isPlausibleDeclarationStart(line)) {
+    const classMatch = codeLine.match(/\b(class|interface|enum|record)\s+([A-Za-z_$][\w$]*)\b/);
+    if (classMatch) {
+      const currentClass = classMatch[2] ?? path.posix.basename(file, '.java');
+      const endLine = findBlockEndLine(lines, index) ?? fileEndLine;
+      symbols.push({
+        target: currentClass,
+        name: currentClass,
+        file,
+        line: lineNo,
+        endLine,
+        kind: 'class',
+      });
+      classScopes.push({ name: currentClass, endLine });
+    }
+
+    const currentClass = classScopes[classScopes.length - 1]?.name;
+    if (isPlausibleDeclarationStart(codeLine)) {
       const declaration = collectDeclaration(lines, index);
       const method = methodNameFromDeclaration(declaration, currentClass);
       if (method) {
@@ -58,28 +81,18 @@ export function findJavaSourceSymbols(file: string, content: string): JavaSource
           owner: currentClass,
           file,
           line: lineNo,
-          endLine: lines.length,
+          endLine: findBlockEndLine(lines, index) ?? fileEndLine,
           kind: 'method',
         });
       }
     }
   }
 
-  return closeSymbolRanges(symbols, lastNonEmptyLine(lines));
+  return symbols.sort((a, b) => a.line - b.line || (a.kind === 'class' ? -1 : 1));
 }
 
 export function impactLensTitle(counts: ImpactLensCounts): string {
   return `Impact: ${counts.endpoints} endpoints | ${counts.tests} tests | ${counts.references} refs`;
-}
-
-function closeSymbolRanges(symbols: JavaSourceSymbol[], fileEndLine: number): JavaSourceSymbol[] {
-  const sorted = symbols.slice().sort((a, b) => a.line - b.line || (a.kind === 'class' ? -1 : 1));
-  for (let index = 0; index < sorted.length; index++) {
-    const symbol = sorted[index]!;
-    const next = sorted[index + 1];
-    symbol.endLine = next ? Math.max(symbol.line, next.line - 1) : fileEndLine;
-  }
-  return sorted;
 }
 
 function isPlausibleDeclarationStart(line: string): boolean {
@@ -98,12 +111,111 @@ function lastNonEmptyLine(lines: string[]): number {
 
 function collectDeclaration(lines: string[], startIndex: number): string {
   const parts: string[] = [];
-  for (let offset = 0; offset < 8 && startIndex + offset < lines.length; offset++) {
+  for (let offset = 0; offset < 24 && startIndex + offset < lines.length; offset++) {
     const line = lines[startIndex + offset] ?? '';
     parts.push(line);
-    if (line.includes('{') || line.trim().endsWith(';')) break;
+    const trimmed = line.trim();
+    if (trimmed.includes('{') || trimmed.endsWith(';')) break;
   }
   return parts.join(' ');
+}
+
+function findBlockEndLine(lines: string[], startIndex: number): number | undefined {
+  let depth = 0;
+  let started = false;
+  let scanState: NonCodeScanState = { inBlockComment: false, inTextBlock: false };
+
+  for (let index = startIndex; index < lines.length; index++) {
+    const stripped = stripNonCodeForBraceScan(lines[index] ?? '', scanState);
+    const line = stripped.code;
+    scanState = stripped.state;
+    for (const char of line) {
+      if (char === '{') {
+        depth++;
+        started = true;
+      } else if (char === '}' && started) {
+        depth--;
+        if (depth === 0) return index + 1;
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function stripNonCodeForBraceScan(line: string, state: NonCodeScanState): {
+  code: string;
+  state: NonCodeScanState;
+} {
+  let result = '';
+  let quote: '"' | "'" | undefined;
+  let escaped = false;
+  let blockComment = state.inBlockComment;
+  let textBlock = state.inTextBlock;
+
+  for (let index = 0; index < line.length; index++) {
+    const char = line[index] ?? '';
+    const next = line[index + 1];
+    const afterNext = line[index + 2];
+
+    if (textBlock) {
+      result += ' ';
+      if (char === '"' && next === '"' && afterNext === '"') {
+        textBlock = false;
+        result += '  ';
+        index += 2;
+      }
+      continue;
+    }
+
+    if (blockComment) {
+      result += ' ';
+      if (char === '*' && next === '/') {
+        blockComment = false;
+        result += ' ';
+        index++;
+      }
+      continue;
+    }
+
+    if (!quote && char === '/' && next === '/') break;
+
+    if (quote) {
+      result += ' ';
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
+
+    if (char === '"' && next === '"' && afterNext === '"') {
+      textBlock = true;
+      result += '   ';
+      index += 2;
+      continue;
+    }
+
+    if (char === '/' && next === '*') {
+      blockComment = true;
+      result += '  ';
+      index++;
+      continue;
+    }
+
+    if (char === '"' || char === "'") {
+      quote = char;
+      result += ' ';
+      continue;
+    }
+
+    result += char;
+  }
+
+  return { code: result, state: { inBlockComment: blockComment, inTextBlock: textBlock } };
 }
 
 function methodNameFromDeclaration(declaration: string, owner: string | undefined): string | undefined {

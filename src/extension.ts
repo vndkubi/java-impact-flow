@@ -10,10 +10,37 @@ import { renderImpactGraphHtml, type ImpactViewTab } from './render.js';
 import { renderPatchRiskReportHtml } from './renderRiskReport.js';
 import { RiskWorkbenchProvider, type AnalyzerOptions } from './riskWorkbench.js';
 import { buildPatchRiskReport, type PatchRiskReport } from './riskReport.js';
+import { TEST_COMMAND_BATCH_LIMIT, runNormalizedTestCommands } from './testCommandRunner.js';
+import { prepareTestCommandForExecution } from './testCommandExecutor.js';
+import type { TestCommandRunner } from './testCommandRunner.js';
+import {
+  asWebviewMessageRecord,
+  getWebviewMessageType,
+  isImpactMessageType,
+  isUtilityMessageType,
+  WEBVIEW_MESSAGE_TYPES,
+} from './webviewMessageSchema.js';
 
 let impactDiagnostics: vscode.DiagnosticCollection | undefined;
 const impactCache = new ImpactGraphCache();
 let riskWorkbench: RiskWorkbenchProvider | undefined;
+const TEST_TERMINAL_NAME = 'Java Impact Flow Tests';
+const TEST_COMMAND_MISSING_WORKSPACE_WARNING = 'Java Impact Flow needs an open workspace folder to run test commands.';
+const TEST_COMMAND_MISSING_SINGLE_COMMAND_WARNING = 'Java Impact Flow has no runnable test command to execute.';
+const TEST_COMMAND_MISSING_COMMANDS_WARNING = 'Java Impact Flow has no runnable test commands to execute.';
+const OPEN_LOCATION_INVALID_FILE_WARNING = 'Java Impact Flow received an invalid file path for openLocation.';
+const OPEN_LOCATION_NO_WORKSPACE_WARNING = 'Ext Graph needs an open workspace folder to open files.';
+const UNKNOWN_WEBVIEW_MESSAGE_WARNING = 'Java Impact Flow ignored unsupported webview message.';
+const INVALID_WEBVIEW_MESSAGE_WARNING = 'Java Impact Flow ignored malformed webview message.';
+const UNKNOWN_UTILITY_WEBVIEW_MESSAGE_WARNING = 'Java Impact Flow ignored unsupported risk utility message.';
+const INVALID_UTILITY_WEBVIEW_MESSAGE_WARNING = 'Java Impact Flow ignored malformed risk utility message.';
+
+interface SharedTestTerminalState {
+  terminal: vscode.Terminal;
+  workspace: string;
+}
+
+let sharedTestTerminal: SharedTestTerminalState | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
   impactDiagnostics = vscode.languages.createDiagnosticCollection('java-impact-flow');
@@ -61,7 +88,11 @@ export function activate(context: vscode.ExtensionContext): void {
 }
 
 export function deactivate(): void {
-  // No persistent resources.
+  if (impactDiagnostics) {
+    impactDiagnostics.dispose();
+    impactDiagnostics = undefined;
+  }
+  __resetSharedTestTerminalForTests();
 }
 
 async function showImpactGraph(exportOnly: boolean): Promise<void> {
@@ -268,59 +299,186 @@ function openRiskReportPanel(workspace: string, report: PatchRiskReport): void {
   openRiskPanel(workspace, panel, report);
 }
 
-async function handleWebviewMessage(workspace: string, graph: ImpactGraph, message: unknown): Promise<void> {
-  if (!message || typeof message !== 'object') return;
-  const record = message as Record<string, unknown>;
-  if (record.type === 'openLocation') {
+export async function handleWebviewMessage(workspace: string, graph: ImpactGraph | null | undefined, message: unknown): Promise<void> {
+  const record = asWebviewMessageRecord(message);
+  if (!record) {
+    vscode.window.showWarningMessage(INVALID_WEBVIEW_MESSAGE_WARNING);
+    return;
+  }
+  const type = getWebviewMessageType(record);
+  if (!type) {
+    vscode.window.showWarningMessage(INVALID_WEBVIEW_MESSAGE_WARNING);
+    return;
+  }
+  if (!isImpactMessageType(type)) {
+    vscode.window.showWarningMessage(`${UNKNOWN_WEBVIEW_MESSAGE_WARNING} ${type}`);
+    return;
+  }
+  if (type === WEBVIEW_MESSAGE_TYPES.openLocation) {
     await openLocation(workspace, record.file, record.line);
     return;
   }
-  if (record.type === 'copyText' && typeof record.text === 'string') {
+  if (type === WEBVIEW_MESSAGE_TYPES.copyText && typeof record.text === 'string') {
     await vscode.env.clipboard.writeText(record.text);
     return;
   }
-  if (record.type === 'runTestCommand' && typeof record.command === 'string') {
-    runTestCommand(workspace, record.command);
+  if (type === WEBVIEW_MESSAGE_TYPES.runTestCommand) {
+    handleRunTestMessage(
+      workspace,
+      type,
+      record,
+      runTestCommand,
+      () => vscode.window.showInformationMessage(TEST_COMMAND_MISSING_SINGLE_COMMAND_WARNING),
+      () => vscode.window.showInformationMessage(TEST_COMMAND_MISSING_COMMANDS_WARNING),
+    );
     return;
   }
-  if (record.type === 'runTestCommands' && Array.isArray(record.commands)) {
-    for (const command of record.commands) {
-      if (typeof command === 'string') runTestCommand(workspace, command);
-    }
+  if (type === WEBVIEW_MESSAGE_TYPES.runTestCommands) {
+    handleRunTestMessage(
+      workspace,
+      type,
+      record,
+      runTestCommand,
+      () => vscode.window.showInformationMessage(TEST_COMMAND_MISSING_SINGLE_COMMAND_WARNING),
+      () => vscode.window.showInformationMessage(TEST_COMMAND_MISSING_COMMANDS_WARNING),
+    );
     return;
   }
-  if (record.type === 'publishDiagnostics') {
+  if (type === WEBVIEW_MESSAGE_TYPES.publishDiagnostics) {
     publishImpactDiagnostics(workspace, graph);
+    return;
   }
+  vscode.window.showWarningMessage(`${UNKNOWN_WEBVIEW_MESSAGE_WARNING} ${type}`);
 }
 
-async function handleUtilityWebviewMessage(workspace: string, message: unknown): Promise<void> {
-  if (!message || typeof message !== 'object') return;
-  const record = message as Record<string, unknown>;
-  if (record.type === 'copyText' && typeof record.text === 'string') {
+export async function handleUtilityWebviewMessage(workspace: string, message: unknown): Promise<void> {
+  const record = asWebviewMessageRecord(message);
+  if (!record) {
+    vscode.window.showWarningMessage(INVALID_UTILITY_WEBVIEW_MESSAGE_WARNING);
+    return;
+  }
+  const type = getWebviewMessageType(record);
+  if (!type) {
+    vscode.window.showWarningMessage(INVALID_UTILITY_WEBVIEW_MESSAGE_WARNING);
+    return;
+  }
+  if (type === WEBVIEW_MESSAGE_TYPES.publishDiagnostics) {
+    vscode.window.showWarningMessage('Java Impact Flow ignored risk utility publish diagnostics message.');
+    return;
+  }
+  if (!isUtilityMessageType(type)) {
+    vscode.window.showWarningMessage(`${UNKNOWN_UTILITY_WEBVIEW_MESSAGE_WARNING} ${type}`);
+    return;
+  }
+  if (type === WEBVIEW_MESSAGE_TYPES.copyText && typeof record.text === 'string') {
     await vscode.env.clipboard.writeText(record.text);
     return;
   }
-  if (record.type === 'runTestCommands' && Array.isArray(record.commands)) {
-    for (const command of record.commands) {
-      if (typeof command === 'string') runTestCommand(workspace, command);
-    }
+  if (type === WEBVIEW_MESSAGE_TYPES.runTestCommands) {
+  handleRunTestMessage(
+      workspace,
+      type,
+      record,
+      runTestCommand,
+      () => vscode.window.showInformationMessage(TEST_COMMAND_MISSING_SINGLE_COMMAND_WARNING),
+      () => vscode.window.showInformationMessage(TEST_COMMAND_MISSING_COMMANDS_WARNING),
+  );
+  return;
   }
+  vscode.window.showWarningMessage(`${UNKNOWN_UTILITY_WEBVIEW_MESSAGE_WARNING} ${type}`);
+}
+
+function handleRunTestMessage(
+  workspace: string,
+  type: typeof WEBVIEW_MESSAGE_TYPES.runTestCommand | typeof WEBVIEW_MESSAGE_TYPES.runTestCommands,
+  message: Record<string, unknown>,
+  runTestCommand: TestCommandRunner,
+  onNoCommand: () => void,
+  onNoCommands: () => void,
+): void {
+  if (!workspace) {
+    vscode.window.showWarningMessage(TEST_COMMAND_MISSING_WORKSPACE_WARNING);
+    return;
+  }
+  if (type === WEBVIEW_MESSAGE_TYPES.runTestCommand) {
+    handleRunSingleTestCommandMessage(workspace, message.command, runTestCommand, onNoCommand);
+    return;
+  }
+  if (!Array.isArray(message.commands)) {
+    onNoCommands();
+    return;
+  }
+  handleRunTestCommandsMessage(workspace, message.commands, runTestCommand, onNoCommands);
+}
+
+export function handleRunTestCommandsMessage(
+  workspace: string,
+  commands: unknown,
+  runTestCommand: TestCommandRunner,
+  onNoCommands: () => void,
+  maxCommands: number = TEST_COMMAND_BATCH_LIMIT,
+): number {
+  if (!Array.isArray(commands)) return 0;
+  return runNormalizedTestCommands(workspace, commands, runTestCommand, maxCommands, onNoCommands);
+}
+
+export function handleRunSingleTestCommandMessage(
+  workspace: string,
+  command: unknown,
+  runTestCommand: TestCommandRunner,
+  onNoCommand?: () => void,
+): number {
+  if (typeof command !== 'string') {
+    if (onNoCommand) onNoCommand();
+    return 0;
+  }
+  return runNormalizedTestCommands(workspace, [command], runTestCommand, 1, onNoCommand);
 }
 
 function runTestCommand(workspace: string, command: string): void {
-  if (command.startsWith('Run test class:')) {
-    vscode.window.showInformationMessage(command);
+  const execution = prepareTestCommandForExecution(command);
+  if (execution.mode === 'ignore') return;
+  if (execution.mode === 'information') {
+    vscode.window.showInformationMessage(execution.command);
     return;
   }
-  const terminal = vscode.window.createTerminal({ name: 'Java Impact Flow Tests', cwd: workspace });
-  terminal.sendText(command);
+  const terminal = getSharedTestTerminal(workspace);
+  terminal.sendText(execution.command);
   terminal.show();
 }
 
-function publishImpactDiagnostics(workspace: string, graph: ImpactGraph): void {
-  const diagnostics = diagnosticItemsForImpactGraph(graph);
+function getSharedTestTerminal(workspace: string): vscode.Terminal {
+  const stale = sharedTestTerminal;
+  if (stale && stale.workspace === workspace && !isTerminalClosed(stale.terminal)) {
+    return stale.terminal;
+  }
+  stale?.terminal?.dispose();
+  const terminal = vscode.window.createTerminal({ name: TEST_TERMINAL_NAME, cwd: workspace });
+  sharedTestTerminal = { terminal, workspace };
+  return terminal;
+}
+
+function isTerminalClosed(terminal: vscode.Terminal): boolean {
+  return terminal.exitStatus !== undefined;
+}
+
+export function __resetSharedTestTerminalForTests(): void {
+  const stale = sharedTestTerminal;
+  sharedTestTerminal = undefined;
+  stale?.terminal?.dispose();
+}
+
+function publishImpactDiagnostics(workspace: string, graph: ImpactGraph | null | undefined): void {
+  if (!workspace) {
+    vscode.window.showWarningMessage('Java Impact Flow needs an open workspace folder to publish diagnostics.');
+    return;
+  }
   impactDiagnostics?.clear();
+  if (!graph || typeof graph !== 'object' || !Array.isArray(graph.flows)) {
+    vscode.window.showWarningMessage('Java Impact Flow has no impact graph data to publish diagnostics.');
+    return;
+  }
+  const diagnostics = diagnosticItemsForImpactGraph(graph);
   const byFile = new Map<string, vscode.Diagnostic[]>();
   for (const item of diagnostics) {
     const line = Math.max(0, item.line - 1);
@@ -338,7 +496,14 @@ function publishImpactDiagnostics(workspace: string, graph: ImpactGraph): void {
 }
 
 async function openLocation(workspace: string, file: unknown, line: unknown): Promise<void> {
-  if (typeof file !== 'string' || file.trim().length === 0) return;
+  if (!workspace) {
+    vscode.window.showWarningMessage(OPEN_LOCATION_NO_WORKSPACE_WARNING);
+    return;
+  }
+  if (typeof file !== 'string' || file.trim().length === 0) {
+    vscode.window.showWarningMessage(OPEN_LOCATION_INVALID_FILE_WARNING);
+    return;
+  }
   const requested = path.isAbsolute(file) ? path.normalize(file) : path.resolve(workspace, file);
   const workspaceRoot = path.resolve(workspace);
   const relative = path.relative(workspaceRoot, requested);
@@ -348,11 +513,16 @@ async function openLocation(workspace: string, file: unknown, line: unknown): Pr
   }
 
   const lineNumber = typeof line === 'number' && Number.isFinite(line) ? Math.max(0, Math.floor(line) - 1) : 0;
-  const document = await vscode.workspace.openTextDocument(vscode.Uri.file(requested));
-  const editor = await vscode.window.showTextDocument(document, vscode.ViewColumn.One, false);
-  const position = new vscode.Position(Math.min(lineNumber, Math.max(0, document.lineCount - 1)), 0);
-  editor.selection = new vscode.Selection(position, position);
-  editor.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.InCenter);
+  try {
+    const document = await vscode.workspace.openTextDocument(vscode.Uri.file(requested));
+    const editor = await vscode.window.showTextDocument(document, vscode.ViewColumn.One, false);
+    const position = new vscode.Position(Math.min(lineNumber, Math.max(0, document.lineCount - 1)), 0);
+    editor.selection = new vscode.Selection(position, position);
+    editor.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.InCenter);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    vscode.window.showWarningMessage(`Ext Graph could not open file ${file}: ${message}`);
+  }
 }
 
 function workspaceRoot(): string | undefined {

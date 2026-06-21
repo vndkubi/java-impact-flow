@@ -6,6 +6,9 @@ import { findJavaSourceSymbols } from './javaSymbols.js';
 
 const execFileAsync = promisify(execFile);
 
+const MAX_CHANGED_LINES_PER_HUNK = 5000;
+const MAX_CHANGED_LINES_TOTAL = 20_000;
+
 export interface ChangedJavaFile {
   file: string;
   status: string;
@@ -42,12 +45,32 @@ export function parseGitPorcelainJavaFiles(output: string): ChangedJavaFile[] {
   const files: ChangedJavaFile[] = [];
   for (let index = 0; index < parts.length; index++) {
     const record = parts[index] ?? '';
-    if (record.length < 4) continue;
-    const status = record.slice(0, 2);
-    const file = slash(record.slice(3));
+    if (record.length < 2) continue;
+    const statusToken = record.slice(0, 2);
+    let status = statusToken.replace(/[0-9]/g, '').trim();
+    if (status.length === 0) status = statusToken;
+    const start = (() => {
+      let cursor = 2;
+      while (cursor < record.length && /\d/.test(record[cursor] ?? '')) cursor++;
+      while (record[cursor] === ' ' || record[cursor] === '\t') cursor++;
+      return cursor;
+    })();
+    const sourceFile = slash(record.slice(start).trimStart());
     if (status.includes('D')) continue;
-    if (file.endsWith('.java')) files.push({ file, status: status.trim() || 'M' });
-    if (status.startsWith('R') || status.startsWith('C')) index++;
+
+    const statusName = status.trim() || 'M';
+    if (status.includes('R') || status.includes('C')) {
+      const destination = index + 1 < parts.length ? slash((parts[index + 1] ?? '').trimStart()) : '';
+      if (destination.endsWith('.java')) {
+        files.push({ file: destination, status: statusName });
+      } else if (sourceFile.endsWith('.java')) {
+        files.push({ file: sourceFile, status: statusName });
+      }
+      if (index + 1 < parts.length) index++;
+      continue;
+    }
+
+    if (sourceFile.endsWith('.java')) files.push({ file: sourceFile, status: statusName });
   }
   return uniqueBy(files, item => item.file);
 }
@@ -77,15 +100,13 @@ export async function inferChangedJavaTargets(
 export function inferTargetsFromJavaSource(file: string, content: string, changedLines: number[]): ChangedJavaTarget[] {
   const symbols = findJavaSourceSymbols(file, content);
   const inspectedLines = changedLines.length ? changedLines : allLineNumbers(content);
+  const methodSymbols = symbols.filter(symbol => symbol.kind === 'method');
+  const classSymbols = symbols.filter(symbol => symbol.kind === 'class');
   const targets: ChangedJavaTarget[] = [];
 
   for (const line of inspectedLines) {
-    const method = symbols
-      .filter(symbol => symbol.kind === 'method' && symbol.line <= line && line <= symbol.endLine)
-      .sort((a, b) => b.line - a.line)[0];
-    const classSymbol = symbols
-      .filter(symbol => symbol.kind === 'class' && symbol.line <= line && line <= symbol.endLine)
-      .sort((a, b) => b.line - a.line)[0];
+    const method = pickSymbolForLine(methodSymbols, line);
+    const classSymbol = pickSymbolForLine(classSymbols, line);
     const symbol = method ?? classSymbol;
     if (symbol) {
       targets.push({
@@ -110,14 +131,53 @@ export function inferTargetsFromJavaSource(file: string, content: string, change
   }];
 }
 
+function pickSymbolForLine<T extends { line: number; endLine: number }>(symbols: T[], line: number): T | undefined {
+  if (symbols.length === 0 || !Number.isFinite(line)) return undefined;
+
+  let low = 0;
+  let high = symbols.length - 1;
+  let rightmostStart = -1;
+  while (low <= high) {
+    const mid = (low + high) >>> 1;
+    const symbol = symbols[mid];
+    if (!symbol) break;
+    if (symbol.line <= line) {
+      rightmostStart = mid;
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+
+  for (let index = rightmostStart; index >= 0; index -= 1) {
+    const symbol = symbols[index];
+    if (!symbol) continue;
+    // Search backward to account for nested symbols where an inner block may
+    // close before an outer block that started earlier.
+    if (symbol.endLine >= line) return symbol;
+  }
+  return undefined;
+}
+
 export function parseUnifiedDiffNewLines(diff: string): number[] {
   const lines = new Set<number>();
   const pattern = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/gm;
   let match: RegExpExecArray | null;
+  let isCapped = false;
   while ((match = pattern.exec(diff))) {
     const start = Number(match[1] ?? '0');
-    const count = match[2] === undefined ? 1 : Number(match[2]);
-    for (let offset = 0; offset < count; offset++) lines.add(start + offset);
+    if (!Number.isFinite(start) || start <= 0) continue;
+    const rawCount = match[2] === undefined ? 1 : Number(match[2]);
+    if (!Number.isFinite(rawCount) || rawCount <= 0) continue;
+    const count = Math.min(rawCount, MAX_CHANGED_LINES_PER_HUNK);
+    for (let offset = 0; offset < count; offset++) {
+      if (lines.size >= MAX_CHANGED_LINES_TOTAL) {
+        isCapped = true;
+        break;
+      }
+      lines.add(start + offset);
+    }
+    if (isCapped) break;
   }
   return [...lines].sort((a, b) => a - b);
 }

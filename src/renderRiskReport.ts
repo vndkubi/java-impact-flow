@@ -1,4 +1,6 @@
 import type { PatchRiskReport } from './riskReport.js';
+import { TEST_COMMAND_BATCH_LIMIT } from './testCommandRunner.js';
+import { webviewMessageTypesJs, webviewNormalizedCommandsJs } from './webviewMessageSnippets.js';
 
 export function renderPatchRiskReportHtml(report: PatchRiskReport): string {
   const data = safeJsonForHtml(report);
@@ -58,7 +60,7 @@ export function renderPatchRiskReportHtml(report: PatchRiskReport): string {
       <p class="muted">Changed symbols, impacted endpoints, suggested tests, trust, and unresolved risk.</p>
       <div class="actions">
         <button id="copySummary" type="button">Copy PR Summary</button>
-        <button id="runTopTests" type="button">Run Top Tests</button>
+        <button id="runTopTests" type="button">Run Top ${TEST_COMMAND_BATCH_LIMIT}</button>
       </div>
       <div class="grid" id="metrics"></div>
     </section>
@@ -82,6 +84,7 @@ export function renderPatchRiskReportHtml(report: PatchRiskReport): string {
   <script>
     const report = ${data};
     const vscodeApi = typeof acquireVsCodeApi === 'function' ? acquireVsCodeApi() : null;
+${webviewMessageTypesJs}
     const decision = document.getElementById('decision');
     decision.textContent = report.decision;
     decision.className = 'decision ' + report.decision;
@@ -100,15 +103,43 @@ export function renderPatchRiskReportHtml(report: PatchRiskReport): string {
       ? report.reasons.map(reason => '<div class="item">' + escapeHtml(reason) + '</div>').join('')
       : '<div class="item muted">No risk reasons.</div>';
     document.getElementById('markdown').textContent = report.markdown;
-    document.getElementById('copySummary').onclick = () => post({ type: 'copyText', text: report.markdown });
-    document.getElementById('runTopTests').onclick = () => post({ type: 'runTestCommands', commands: report.topTests.slice(0, 3).map(test => test.command) });
+    const topCommandLimit = ${TEST_COMMAND_BATCH_LIMIT};
+    document.getElementById('copySummary').onclick = () => post({ type: WEBVIEW_MESSAGE_TYPES.copyText, text: report.markdown });
+    document.getElementById('runTopTests').onclick = () => post({
+      type: WEBVIEW_MESSAGE_TYPES.runTestCommands,
+      commands: collectNormalizedCommands(report.topTests.map(test => test.command), topCommandLimit),
+    });
+${webviewNormalizedCommandsJs}
     function post(message) {
-      if (vscodeApi) vscodeApi.postMessage(message);
-      else if (message.type === 'copyText') navigator.clipboard.writeText(message.text).catch(() => {});
+      if (sendWebviewMessage(message)) return;
+      if (!vscodeApi && message.type === WEBVIEW_MESSAGE_TYPES.copyText && typeof message.text === 'string') {
+        navigator.clipboard.writeText(message.text).catch(() => {});
+      }
+    }
+
+    function sendWebviewMessage(message) {
+      if (!vscodeApi || !message || typeof message !== 'object') return false;
+      const type = message.type;
+      if (type === WEBVIEW_MESSAGE_TYPES.copyText) {
+        if (typeof message.text !== 'string') return false;
+        vscodeApi.postMessage({ type: WEBVIEW_MESSAGE_TYPES.copyText, text: message.text });
+        return true;
+      }
+      if (type === WEBVIEW_MESSAGE_TYPES.runTestCommands) {
+        if (!Array.isArray(message.commands)) return false;
+        const commands = Array.from(new Set(
+          message.commands.filter(command => typeof command === 'string' && command.trim().length > 0).map(command => command.trim())
+        ));
+        if (!commands.length) return false;
+        vscodeApi.postMessage({ type: WEBVIEW_MESSAGE_TYPES.runTestCommands, commands });
+        return true;
+      }
+      return false;
     }
     function escapeHtml(value) {
       return String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
     }
+
   </script>
 </body>
 </html>`;

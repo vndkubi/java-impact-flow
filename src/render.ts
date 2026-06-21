@@ -1,16 +1,30 @@
+import fs from 'node:fs';
 import type { ImpactGraph } from './impactGraph.js';
 import { buildStaticDebugSessions } from './staticDebugger.js';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
+import {
+  buildTestCommandsByFile,
+  isTestFile,
+  normalizeTestFilePath,
+  testClassNameFromFile,
+} from './testCommand.js';
+import { TEST_COMMAND_BATCH_LIMIT } from './testCommandRunner.js';
+import { webviewMessageTypesJs, webviewNormalizedCommandsJs } from './webviewMessageSnippets.js';
 
 export type ImpactViewTab = 'sequence' | 'static-debug' | 'references' | 'graph';
 
 export interface RenderImpactGraphOptions {
   initialTab?: ImpactViewTab;
+  productVersion?: string;
 }
 
 export function renderImpactGraphHtml(graph: ImpactGraph, options: RenderImpactGraphOptions = {}): string {
   const data = safeJsonForHtml(graph);
   const staticDebuggerData = safeJsonForHtml(buildStaticDebugSessions(graph));
+  const testCommandsByFile = safeJsonForHtml(buildTestCommandsByFile(graph));
   const initialTab = safeJsonForHtml(options.initialTab ?? 'sequence');
+  const productVersion = formatVersionLabel(resolveManifestVersion(options.productVersion));
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -786,7 +800,7 @@ export function renderImpactGraphHtml(graph: ImpactGraph, options: RenderImpactG
     <div id="workspace" class="workspace">
       <aside class="nav-panel">
         <section class="panel-section product-head">
-          <div class="product-row"><strong>Ext Graph</strong><span class="version-pill">v0.1.0</span></div>
+          <div class="product-row"><strong>Ext Graph</strong><span class="version-pill">${productVersion}</span></div>
           <h1 id="targetTitle"></h1>
           <div class="meta" id="targetMeta"></div>
           <div class="branch-line">local Java analyzer</div>
@@ -915,8 +929,10 @@ export function renderImpactGraphHtml(graph: ImpactGraph, options: RenderImpactG
   <script>
     const graph = ${data};
     const staticDebuggerSessions = ${staticDebuggerData};
+    const testCommandsByFile = ${testCommandsByFile};
     const initialTab = ${initialTab};
     const vscodeApi = typeof acquireVsCodeApi === 'function' ? acquireVsCodeApi() : null;
+${webviewMessageTypesJs}
     const denseGraph = graph.nodes.length > 90 || graph.edges.length > 140;
     const colors = {
       target: 'var(--target)',
@@ -1055,7 +1071,7 @@ export function renderImpactGraphHtml(graph: ImpactGraph, options: RenderImpactG
           '<button class="action-btn" id="copyPrSummary" type="button">Copy PR Summary</button>' +
         '</div>';
       document.getElementById('publishDiagnostics').onclick = () => {
-        if (vscodeApi) vscodeApi.postMessage({ type: 'publishDiagnostics' });
+        sendWebviewMessage({ type: WEBVIEW_MESSAGE_TYPES.publishDiagnostics });
       };
       document.getElementById('copyPrSummary').onclick = async () => {
         await copyText(impactPrSummaryMarkdown());
@@ -1090,14 +1106,16 @@ export function renderImpactGraphHtml(graph: ImpactGraph, options: RenderImpactG
 
     function renderSuggestedTests() {
       const suggestions = suggestedTestFiles();
+      const topTestCommandLimit = ${TEST_COMMAND_BATCH_LIMIT};
+      const topTestCommandLabel = 'Run Top ${TEST_COMMAND_BATCH_LIMIT}';
       document.getElementById('testSuggestionCount').innerHTML = suggestions.length
-        ? '<button class="copy-test-command" id="runTopTests" type="button">Run Top 3</button>'
+        ? '<button class="copy-test-command" id="runTopTests" type="button">' + topTestCommandLabel + '</button>'
         : '0';
       const runTop = document.getElementById('runTopTests');
       if (runTop) {
         runTop.onclick = event => {
           event.stopPropagation();
-          runTestCommands(suggestions.slice(0, 3).map(item => testCommandForFile(item.file)));
+          runTestCommands(suggestions.slice(0, topTestCommandLimit).map(item => testCommandForFile(item.file)));
         };
       }
       const list = document.getElementById('suggestedTests');
@@ -1597,12 +1615,13 @@ export function renderImpactGraphHtml(graph: ImpactGraph, options: RenderImpactG
       const groups = new Map();
       (graph.evidence || []).forEach(item => {
         if (!item.file || (!isTestFile(item.file) && item.kind !== 'test')) return;
-        const group = groups.get(item.file) || { file: item.file, count: 0, line: item.line || 1, kinds: new Set(), score: 0 };
+        const normalizedFile = normalizeTestFilePath(item.file);
+        const group = groups.get(normalizedFile) || { file: normalizedFile, count: 0, line: item.line || 1, kinds: new Set(), score: 0 };
         group.count++;
         group.line = Math.min(group.line, item.line || group.line);
         group.kinds.add(item.kind);
         group.score += 10 + (item.kind === 'test' ? 5 : 0);
-        groups.set(item.file, group);
+        groups.set(normalizedFile, group);
       });
       return [...groups.values()].map(group => {
         const name = shortFile(group.file);
@@ -1665,53 +1684,8 @@ export function renderImpactGraphHtml(graph: ImpactGraph, options: RenderImpactG
     }
 
     function testCommandForFile(file) {
-      const className = testClassNameFromFile(file);
-      const modulePath = modulePathForTestFile(file);
-      const buildSystem = graph.metadata.buildSystem || { tool: 'unknown' };
-      if (buildSystem.tool === 'gradle') {
-        const runner = commandRunner(buildSystem.wrapper || 'gradle');
-        const task = modulePath ? ':' + modulePath.split('/').join(':') + ':test' : 'test';
-        return runner + ' ' + task + ' --tests "' + className + '"';
-      }
-      if (buildSystem.tool === 'maven') {
-        const runner = commandRunner(buildSystem.wrapper || 'mvn');
-        const moduleFlag = modulePath ? ' -pl ' + modulePath : '';
-        return runner + moduleFlag + ' -Dtest=' + simpleClassName(className) + ' test';
-      }
-      return 'Run test class: ' + className;
-    }
-
-    function commandRunner(name) {
-      const windows = /^[A-Za-z]:[\\\\/]/.test(String(graph.metadata.root || '')) || String(graph.metadata.root || '').includes('\\\\');
-      if (name === 'gradlew.bat' || name === 'mvnw.cmd') return windows ? '.\\\\' + name : './' + name.replace(/\\.bat$|\\.cmd$/i, '');
-      if (name === 'gradlew' || name === 'mvnw') return windows ? '.\\\\' + name + (name === 'gradlew' ? '.bat' : '.cmd') : './' + name;
-      return name;
-    }
-
-    function modulePathForTestFile(file) {
-      const normalized = String(file || '').replace(/\\\\/g, '/');
-      const marker = '/src/test/';
-      const index = normalized.indexOf(marker);
-      if (index <= 0) return '';
-      return normalized.slice(0, index);
-    }
-
-    function testClassNameFromFile(file) {
-      const normalized = String(file || '').replace(/\\\\/g, '/');
-      const javaMarker = 'src/test/java/';
-      const javaIndex = normalized.indexOf(javaMarker);
-      if (javaIndex >= 0) {
-        return normalized.slice(javaIndex + javaMarker.length).replace(/\\.java$/, '').split('/').join('.');
-      }
-      const testIndex = normalized.indexOf('/test/');
-      if (testIndex >= 0) {
-        return normalized.slice(testIndex + '/test/'.length).replace(/\\.java$/, '').split('/').join('.');
-      }
-      return simpleClassName(normalized.replace(/\\.java$/, ''));
-    }
-
-    function simpleClassName(value) {
-      return String(value || '').replace(/\\\\/g, '/').split('/').pop().split('.').filter(Boolean).pop() || String(value || '');
+      const key = normalizeTestFilePath(String(file));
+      return testCommandsByFile[key] || testCommandsByFile[String(file)] || 'Run test class: ' + testClassNameFromFile(file);
     }
 
     function capitalize(value) {
@@ -1720,12 +1694,11 @@ export function renderImpactGraphHtml(graph: ImpactGraph, options: RenderImpactG
     }
 
     async function copyText(text) {
-      if (vscodeApi) {
-        vscodeApi.postMessage({ type: 'copyText', text });
+      if (sendWebviewMessage({ type: WEBVIEW_MESSAGE_TYPES.copyText, text })) {
         return true;
       }
       try {
-        await navigator.clipboard.writeText(text);
+        await navigator.clipboard.writeText(String(text));
         return true;
       } catch {
         try {
@@ -1746,23 +1719,58 @@ export function renderImpactGraphHtml(graph: ImpactGraph, options: RenderImpactG
     }
 
     async function runTestCommand(command) {
-      if (vscodeApi) {
-        vscodeApi.postMessage({ type: 'runTestCommand', command });
+      if (sendWebviewMessage({ type: WEBVIEW_MESSAGE_TYPES.runTestCommand, command })) {
         return true;
       }
       return copyText(command);
     }
 
     function runTestCommands(commands) {
-      const filtered = commands.filter(Boolean);
+      const filtered = collectNormalizedCommands(commands);
       if (!filtered.length) return false;
-      if (vscodeApi) {
-        vscodeApi.postMessage({ type: 'runTestCommands', commands: filtered });
+      if (sendWebviewMessage({ type: WEBVIEW_MESSAGE_TYPES.runTestCommands, commands: filtered })) {
         return true;
       }
       copyText(filtered.join('\\n'));
       return true;
     }
+
+    function sendWebviewMessage(message) {
+      if (!vscodeApi || !message || typeof message !== 'object') return false;
+      const type = message.type;
+      if (type === WEBVIEW_MESSAGE_TYPES.copyText) {
+        if (typeof message.text !== 'string') return false;
+        vscodeApi.postMessage({ type: WEBVIEW_MESSAGE_TYPES.copyText, text: message.text });
+        return true;
+      }
+      if (type === WEBVIEW_MESSAGE_TYPES.runTestCommand) {
+        if (typeof message.command !== 'string') return false;
+        const command = message.command.trim();
+        if (!command.length) return false;
+        vscodeApi.postMessage({ type: WEBVIEW_MESSAGE_TYPES.runTestCommand, command });
+        return true;
+      }
+      if (type === WEBVIEW_MESSAGE_TYPES.runTestCommands) {
+        if (!Array.isArray(message.commands)) return false;
+        const commands = collectNormalizedCommands(message.commands);
+        if (!commands.length) return false;
+        vscodeApi.postMessage({ type: WEBVIEW_MESSAGE_TYPES.runTestCommands, commands });
+        return true;
+      }
+      if (type === WEBVIEW_MESSAGE_TYPES.openLocation) {
+        if (typeof message.file !== 'string' || !message.file.trim().length) return false;
+        const rawLine = Number(message.line);
+        const normalizedLine = Number.isFinite(rawLine) && rawLine > 0 ? Math.floor(rawLine) : 1;
+        vscodeApi.postMessage({ type: WEBVIEW_MESSAGE_TYPES.openLocation, file: message.file, line: normalizedLine });
+        return true;
+      }
+      if (type === WEBVIEW_MESSAGE_TYPES.publishDiagnostics) {
+        vscodeApi.postMessage({ type: WEBVIEW_MESSAGE_TYPES.publishDiagnostics });
+        return true;
+      }
+      return false;
+    }
+${webviewNormalizedCommandsJs}
 
     function clearReferenceSearches() {
       document.getElementById('refSearch').value = '';
@@ -2128,7 +2136,7 @@ export function renderImpactGraphHtml(graph: ImpactGraph, options: RenderImpactG
     function openLocation(file, line) {
       const normalizedLine = Number(line) || 1;
       if (vscodeApi) {
-        vscodeApi.postMessage({ type: 'openLocation', file, line: normalizedLine });
+        sendWebviewMessage({ type: WEBVIEW_MESSAGE_TYPES.openLocation, file, line: normalizedLine });
         return;
       }
       const root = String(graph.metadata.root || '').replace(/\\\\/g, '/').replace(/\\/$/, '');
@@ -2285,11 +2293,6 @@ export function renderImpactGraphHtml(graph: ImpactGraph, options: RenderImpactG
       return parts.slice(-2).join('/');
     }
 
-    function isTestFile(file) {
-      const normalized = String(file || '').replace(/\\\\/g, '/').toLowerCase();
-      return normalized.includes('/src/test/') || normalized.includes('/test/') || /test\\.java$/.test(normalized);
-    }
-
     function fileRole(file) {
       const normalized = String(file || '').replace(/\\\\/g, '/').toLowerCase();
       if (normalized.includes('/controllers/')) return 'controller';
@@ -2328,4 +2331,32 @@ function safeJsonForHtml(value: unknown): string {
     .replace(/&/g, '\\u0026')
     .replace(/\u2028/g, '\\u2028')
     .replace(/\u2029/g, '\\u2029');
+}
+
+function resolveManifestVersion(override: string | undefined): string {
+  if (typeof override === 'string') {
+    const explicit = override.trim();
+    if (explicit.length > 0) return explicit;
+  }
+
+  const manifestPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../package.json');
+  try {
+    const content = fs.readFileSync(manifestPath, 'utf-8');
+    const parsed = JSON.parse(content) as { version?: unknown };
+    const version = parsed?.version;
+    if (typeof version === 'string' && version.trim().length > 0) {
+      return version.trim();
+    }
+  } catch {
+    return 'unknown';
+  }
+
+  return 'unknown';
+}
+
+function formatVersionLabel(version: string): string {
+  const trimmed = version.trim();
+  if (trimmed.length === 0) return 'vunknown';
+  const prefixed = trimmed.startsWith('v') ? trimmed : `v${trimmed}`;
+  return prefixed.replace(/[&<>\"']/g, '');
 }

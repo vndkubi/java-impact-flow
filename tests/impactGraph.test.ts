@@ -3,7 +3,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildImpactGraph } from '../src/impactGraph.js';
+import type { ImpactGraph } from '../src/impactGraph.js';
 import { renderImpactGraphHtml } from '../src/render.js';
+import { TEST_COMMAND_BATCH_LIMIT } from '../src/testCommandRunner.js';
+import { WEBVIEW_MESSAGE_TYPES } from '../src/webviewMessageSchema.js';
 
 const roots: string[] = [];
 
@@ -123,7 +126,7 @@ class UserListingPage {}
     expect(html).toContain('applyActiveTabLayout');
     expect(html).toContain('setActiveTab');
     expect(html).toContain('acquireVsCodeApi');
-    expect(html).toContain("type: 'openLocation'");
+    expect(html).toContain(`type: WEBVIEW_MESSAGE_TYPES.${WEBVIEW_MESSAGE_TYPES.openLocation}`);
     expect(html).toContain('open-hint');
     expect(html).toContain('Suggested Tests');
     expect(html).toContain('Trust Score');
@@ -131,19 +134,74 @@ class UserListingPage {}
     expect(html).toContain('renderTrust');
     expect(html).toContain('Copy PR Summary');
     expect(html).toContain('impactPrSummaryMarkdown');
-    expect(html).toContain("type: 'publishDiagnostics'");
+    expect(html).toContain(`type: WEBVIEW_MESSAGE_TYPES.${WEBVIEW_MESSAGE_TYPES.publishDiagnostics}`);
     expect(html).toContain('copy-test-command');
     expect(html).toContain('data-run-test-command');
     expect(html).toContain('<strong>Why:</strong>');
-    expect(html).toContain("type: 'runTestCommand'");
+    expect(html).toContain(`type: WEBVIEW_MESSAGE_TYPES.${WEBVIEW_MESSAGE_TYPES.runTestCommand}`);
     expect(html).toContain('testCommandForFile');
-    expect(html).toContain("type: 'copyText'");
+    expect(html).toContain(`type: WEBVIEW_MESSAGE_TYPES.${WEBVIEW_MESSAGE_TYPES.copyText}`);
     expect(html).toContain('mapFilterBanner');
     expect(html).toContain('activeMapFilter');
     expect(html).toContain('References are filtered by this map group.');
     expect(html).toContain('References are filtered by this selection.');
     expect(html).toContain('Mermaid sequence');
     expect(html).toContain('sequenceDiagram');
+  });
+
+  it('uses sendWebviewMessage for extension-bound webview actions', () => {
+    const baseGraph = baseRenderGraphFixture();
+    const html = renderImpactGraphHtml({
+      ...baseGraph,
+      summary: {
+        ...baseGraph.summary,
+        flows: 1,
+      },
+    });
+
+    const messageFnIndex = html.indexOf('function sendWebviewMessage');
+    expect(messageFnIndex).toBeGreaterThan(0);
+    expect(html).toContain('sendWebviewMessage({ type: WEBVIEW_MESSAGE_TYPES.copyText');
+    expect(html).toContain('sendWebviewMessage({ type: WEBVIEW_MESSAGE_TYPES.runTestCommand');
+    expect(html).toContain('sendWebviewMessage({ type: WEBVIEW_MESSAGE_TYPES.runTestCommands');
+    expect(html).toContain('sendWebviewMessage({ type: WEBVIEW_MESSAGE_TYPES.openLocation');
+    expect(html).toContain('sendWebviewMessage({ type: WEBVIEW_MESSAGE_TYPES.publishDiagnostics');
+
+    expect(html.slice(0, messageFnIndex)).not.toContain('vscodeApi.postMessage');
+    expect((html.match(/vscodeApi\.postMessage\(/g) || []).length).toBe(5);
+  });
+
+  it('validates webview action payloads inside sendWebviewMessage before posting', () => {
+    const html = renderImpactGraphHtml(baseRenderGraphFixture());
+
+    expect(html).toContain('if (type === WEBVIEW_MESSAGE_TYPES.copyText)');
+    expect(html).toContain('if (typeof message.text !== \'string\') return false;');
+    expect(html).toContain('if (type === WEBVIEW_MESSAGE_TYPES.runTestCommand)');
+    expect(html).toContain('if (typeof message.command !== \'string\') return false;');
+    expect(html).toContain('const command = message.command.trim();');
+    expect(html).toContain('if (type === WEBVIEW_MESSAGE_TYPES.runTestCommands)');
+    expect(html).toContain('const commands = collectNormalizedCommands(message.commands);');
+    expect(html).toContain('if (!commands.length) return false;');
+    expect(html).toContain('if (type === WEBVIEW_MESSAGE_TYPES.openLocation)');
+    expect(html).toContain('if (typeof message.file !== \'string\' || !message.file.trim().length) return false;');
+    expect(html).toContain('const rawLine = Number(message.line);');
+    expect(html).toContain('if (type === WEBVIEW_MESSAGE_TYPES.publishDiagnostics)');
+  });
+
+  it('shows current manifest version in product header', () => {
+    const manifestPath = path.resolve(process.cwd(), 'package.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as { version?: unknown };
+    const expectedVersion = `v${typeof manifest.version === 'string' ? manifest.version : 'unknown'}`;
+
+    const html = renderImpactGraphHtml(baseRenderGraphFixture());
+
+    expect(html).toContain(`class="version-pill">${expectedVersion}</span>`);
+  });
+
+  it('uses explicit version override in product header', () => {
+    const html = renderImpactGraphHtml(baseRenderGraphFixture(), { productVersion: '9.9.9-preview' });
+
+    expect(html).toContain('class="version-pill">v9.9.9-preview</span>');
   });
 
   it('supports Jakarta JAX-RS endpoint annotations', async () => {
@@ -415,10 +473,437 @@ class ComplexService {
     expect(html).toContain('Branches');
     expect(html).toContain('Unresolved');
   });
+
+  it('injects precomputed Maven commands for test files into webview payload', () => {
+    const html = renderImpactGraphHtml({
+      schemaVersion: 1,
+      metadata: {
+        root: '/tmp/workspace',
+        target: 'AuthService.findUser',
+        mode: 'patch-impact',
+        generatedAt: '2026-06-21T00:00:00.000Z',
+        analyzer: 'ext-graph-static-java',
+        fileLimit: 100000,
+        truncated: false,
+        skippedLargeFiles: 0,
+        buildSystem: { tool: 'maven', wrapper: 'mvnw' },
+        trust: {
+          level: 'high',
+          score: 92,
+          reasons: [],
+          resolvedCallRate: 1,
+          averageConfidence: 1,
+          unresolvedCalls: 0,
+          staticOnly: true,
+        },
+      },
+      summary: {
+        javaFilesScanned: 1,
+        definitions: 0,
+        references: 1,
+        callSites: 0,
+        fieldReads: 0,
+        fieldWrites: 0,
+        endpoints: 1,
+        callbacks: 0,
+        frameworkAnnotations: 0,
+        flows: 1,
+        maxFlowDepth: 20,
+        tests: 1,
+        topFiles: [],
+      },
+      nodes: [],
+      edges: [],
+      flows: [{
+        id: 'flow-1',
+        label: 'Auth endpoint',
+        endpoint: {
+          method: 'GET',
+          path: '/users/{id}',
+          handler: 'AuthService.findUser',
+          file: 'src/main/java/example/AuthService.java',
+          line: 10,
+        },
+        maxDepth: 20,
+        truncated: false,
+        mermaid: 'sequenceDiagram',
+        diagnostics: {
+          resolvedCalls: 0,
+          unresolvedCalls: 0,
+          branchMarkers: 0,
+          loopMarkers: 0,
+          exceptionMarkers: 0,
+          returnMarkers: 0,
+          averageConfidence: 1,
+          staticOnly: true,
+          notes: [],
+        },
+        steps: [],
+      }],
+      evidence: [{
+        id: 'ev-1',
+        kind: 'test',
+        file: 'core module/src/test/java/example/AuthServiceTest.java',
+        line: 7,
+        text: 'void testFindUser() {}',
+        symbol: 'AuthService.findUser',
+        confidence: 0.9,
+      }],
+      warnings: [],
+    } as ImpactGraph);
+
+    const match = /const testCommandsByFile = (\{[\s\S]*?\});/.exec(html);
+    expect(match).not.toBeNull();
+    const commands = JSON.parse(match?.[1] ?? '{}');
+    const command = commands['core module/src/test/java/example/AuthServiceTest.java'];
+    expect(command).toBe('./mvnw -pl "core module" -Dtest="AuthServiceTest" test');
+  });
+
+  it('injects Windows Maven wrapper command in webview payload', () => {
+    const html = renderImpactGraphHtml({
+      schemaVersion: 1,
+      metadata: {
+        root: 'C:\\workspace\\project',
+        target: 'AuthService.findUser',
+        mode: 'patch-impact',
+        generatedAt: '2026-06-21T00:00:00.000Z',
+        analyzer: 'ext-graph-static-java',
+        fileLimit: 100000,
+        truncated: false,
+        skippedLargeFiles: 0,
+        buildSystem: { tool: 'maven', wrapper: 'mvnw' },
+        trust: {
+          level: 'high',
+          score: 92,
+          reasons: [],
+          resolvedCallRate: 1,
+          averageConfidence: 1,
+          unresolvedCalls: 0,
+          staticOnly: true,
+        },
+      },
+      summary: {
+        javaFilesScanned: 1,
+        definitions: 0,
+        references: 1,
+        callSites: 0,
+        fieldReads: 0,
+        fieldWrites: 0,
+        endpoints: 1,
+        callbacks: 0,
+        frameworkAnnotations: 0,
+        flows: 1,
+        maxFlowDepth: 20,
+        tests: 1,
+        topFiles: [],
+      },
+      nodes: [],
+      edges: [],
+      flows: [{
+        id: 'flow-1',
+        label: 'Auth endpoint',
+        endpoint: {
+          method: 'GET',
+          path: '/users/{id}',
+          handler: 'AuthService.findUser',
+          file: 'src/main/java/example/AuthService.java',
+          line: 10,
+        },
+        maxDepth: 20,
+        truncated: false,
+        mermaid: 'sequenceDiagram',
+        diagnostics: {
+          resolvedCalls: 0,
+          unresolvedCalls: 0,
+          branchMarkers: 0,
+          loopMarkers: 0,
+          exceptionMarkers: 0,
+          returnMarkers: 0,
+          averageConfidence: 1,
+          staticOnly: true,
+          notes: [],
+        },
+        steps: [],
+      }],
+      evidence: [{
+        id: 'ev-1',
+        kind: 'test',
+        file: 'core\\module\\src\\test\\java\\example\\AuthServiceTest.java',
+        line: 7,
+        text: 'void testFindUser() {}',
+        symbol: 'AuthService.findUser',
+        confidence: 0.9,
+      }],
+      warnings: [],
+    } as ImpactGraph);
+
+    const match = /const testCommandsByFile = (\{[\s\S]*?\});/.exec(html);
+    expect(match).not.toBeNull();
+    const commands = JSON.parse(match?.[1] ?? '{}');
+    const command = commands[Object.keys(commands).find(key => key.endsWith('AuthServiceTest.java')) || ''];
+    expect(command).toBe('.\\mvnw.cmd -pl "core/module" -Dtest="AuthServiceTest" test');
+  });
+
+  it('dedupes run-test command batches before posting to the webview host', () => {
+    const html = renderImpactGraphHtml({
+      schemaVersion: 1,
+      metadata: {
+        root: '/tmp/workspace',
+        target: 'AuthService.findUser',
+        mode: 'patch-impact',
+        generatedAt: '2026-06-21T00:00:00.000Z',
+        analyzer: 'ext-graph-static-java',
+        fileLimit: 100000,
+        truncated: false,
+        skippedLargeFiles: 0,
+        buildSystem: { tool: 'maven', wrapper: 'mvnw' },
+        trust: {
+          level: 'high',
+          score: 92,
+          reasons: [],
+          resolvedCallRate: 1,
+          averageConfidence: 1,
+          unresolvedCalls: 0,
+          staticOnly: true,
+        },
+      },
+      summary: {
+        javaFilesScanned: 1,
+        definitions: 0,
+        references: 1,
+        callSites: 0,
+        fieldReads: 0,
+        fieldWrites: 0,
+        endpoints: 1,
+        callbacks: 0,
+        frameworkAnnotations: 0,
+        flows: 1,
+        maxFlowDepth: 20,
+        tests: 1,
+        topFiles: [],
+      },
+      nodes: [],
+      edges: [],
+      flows: [{
+        id: 'flow-1',
+        label: 'Auth endpoint',
+        endpoint: {
+          method: 'GET',
+          path: '/users/{id}',
+          handler: 'AuthService.findUser',
+          file: 'src/main/java/example/AuthService.java',
+          line: 10,
+        },
+        maxDepth: 20,
+        truncated: false,
+        mermaid: 'sequenceDiagram',
+        diagnostics: {
+          resolvedCalls: 0,
+          unresolvedCalls: 0,
+          branchMarkers: 0,
+          loopMarkers: 0,
+          exceptionMarkers: 0,
+          returnMarkers: 0,
+          averageConfidence: 1,
+          staticOnly: true,
+          notes: [],
+        },
+        steps: [],
+      }],
+      evidence: [{
+        id: 'ev-1',
+        kind: 'test',
+        file: 'submodule/src/test/java/example/AuthServiceTest.java',
+        line: 7,
+        text: 'void testFindUser() {}',
+        symbol: 'AuthService.findUser',
+        confidence: 0.9,
+      }],
+      warnings: [],
+    } as ImpactGraph);
+
+    expect(html).toContain('collectNormalizedCommands(commands)');
+    expect(html).toContain('command.trim()');
+  });
+
+  it('deduplicates test suggestions in the impact webview when evidence file separators differ', () => {
+    const html = renderImpactGraphHtml({
+      schemaVersion: 1,
+      metadata: {
+        root: '/tmp/workspace',
+        target: 'AuthService.findUser',
+        mode: 'patch-impact',
+        generatedAt: '2026-06-21T00:00:00.000Z',
+        analyzer: 'ext-graph-static-java',
+        fileLimit: 100000,
+        truncated: false,
+        skippedLargeFiles: 0,
+        buildSystem: { tool: 'maven', wrapper: 'mvnw' },
+        trust: {
+          level: 'high',
+          score: 92,
+          reasons: [],
+          resolvedCallRate: 1,
+          averageConfidence: 1,
+          unresolvedCalls: 0,
+          staticOnly: true,
+        },
+      },
+      summary: {
+        javaFilesScanned: 1,
+        definitions: 0,
+        references: 1,
+        callSites: 0,
+        fieldReads: 0,
+        fieldWrites: 0,
+        endpoints: 1,
+        callbacks: 0,
+        frameworkAnnotations: 0,
+        flows: 1,
+        maxFlowDepth: 20,
+        tests: 1,
+        topFiles: [],
+      },
+      nodes: [],
+      edges: [],
+      flows: [{
+        id: 'flow-1',
+        label: 'Auth endpoint',
+        endpoint: {
+          method: 'GET',
+          path: '/users/{id}',
+          handler: 'AuthService.findUser',
+          file: 'src/main/java/example/AuthService.java',
+          line: 10,
+        },
+        maxDepth: 20,
+        truncated: false,
+        mermaid: 'sequenceDiagram',
+        diagnostics: {
+          resolvedCalls: 0,
+          unresolvedCalls: 0,
+          branchMarkers: 0,
+          loopMarkers: 0,
+          exceptionMarkers: 0,
+          returnMarkers: 0,
+          averageConfidence: 1,
+          staticOnly: true,
+          notes: [],
+        },
+        steps: [],
+      }],
+      evidence: [{
+        id: 'ev-1',
+        kind: 'test',
+        file: 'core\\module\\src/test/java/example/AuthServiceTest.java',
+        line: 7,
+        text: 'void testFindUser() {}',
+        symbol: 'AuthService.findUser',
+        confidence: 0.9,
+      }, {
+        id: 'ev-2',
+        kind: 'test',
+        file: 'core/module/src/test/java/example/AuthServiceTest.java',
+        line: 8,
+        text: 'void testFindUserAgain() {}',
+        symbol: 'AuthService.findUser',
+        confidence: 0.8,
+      }],
+      warnings: [],
+    } as ImpactGraph);
+
+    const testSuggestionRows = html.match(/class=\"test-suggestion /g) ?? [];
+    expect(testSuggestionRows).toHaveLength(1);
+    expect(html).toContain(`Run Top ${TEST_COMMAND_BATCH_LIMIT}`);
+    expect(html).toContain('AuthServiceTest');
+  });
 });
 
 function write(root: string, file: string, content: string): void {
   const abs = path.join(root, file);
   fs.mkdirSync(path.dirname(abs), { recursive: true });
   fs.writeFileSync(abs, content.trimStart(), 'utf-8');
+}
+
+function baseRenderGraphFixture(): ImpactGraph {
+  return {
+    schemaVersion: 1,
+    metadata: {
+      root: '/tmp/workspace',
+      target: 'AuthService.findUser',
+      mode: 'patch-impact',
+      generatedAt: '2026-06-21T00:00:00.000Z',
+      analyzer: 'ext-graph-static-java',
+      fileLimit: 100000,
+      truncated: false,
+      skippedLargeFiles: 0,
+      buildSystem: { tool: 'maven', wrapper: 'mvnw' },
+      trust: {
+        level: 'high',
+        score: 92,
+        reasons: [],
+        resolvedCallRate: 1,
+        averageConfidence: 1,
+        unresolvedCalls: 0,
+        staticOnly: true,
+      },
+    },
+    summary: {
+      javaFilesScanned: 1,
+      definitions: 1,
+      references: 1,
+      callSites: 1,
+      fieldReads: 0,
+      fieldWrites: 0,
+      endpoints: 1,
+      callbacks: 0,
+      frameworkAnnotations: 0,
+      flows: 1,
+      maxFlowDepth: 20,
+      tests: 1,
+      topFiles: [],
+    },
+    nodes: [
+      {
+        id: 'node-1',
+        kind: 'endpoint',
+        file: 'src/main/java/example/AuthService.java',
+        line: 10,
+        label: 'Auth endpoint',
+        signature: 'AuthService.findUser',
+        color: '#f472b6',
+      },
+    ],
+    edges: [],
+    flows: [
+      {
+        id: 'flow-1',
+        label: 'Auth endpoint',
+        endpoint: {
+          method: 'GET',
+          path: '/users/{id}',
+          handler: 'AuthService.findUser',
+          file: 'src/main/java/example/AuthService.java',
+          line: 10,
+        },
+        maxDepth: 20,
+        truncated: false,
+        mermaid: 'sequenceDiagram\\nparticipant A\\nparticipant B',
+        diagnostics: {
+          resolvedCalls: 0,
+          unresolvedCalls: 0,
+          branchMarkers: 0,
+          loopMarkers: 0,
+          exceptionMarkers: 0,
+          returnMarkers: 0,
+          averageConfidence: 1,
+          staticOnly: true,
+          notes: [],
+        },
+        steps: [],
+      },
+    ],
+    evidence: [],
+    warnings: [],
+  };
 }

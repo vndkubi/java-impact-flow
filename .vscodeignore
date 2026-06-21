@@ -8,3 +8,8 @@ validation/**
 .gitignore
 tsconfig.json
 vitest.config.ts
+a/**
+*.vsix
+.github/**
+*smoke*.json
+artifacts/**

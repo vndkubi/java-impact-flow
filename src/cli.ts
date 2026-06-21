@@ -2,12 +2,16 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { collectChangedJavaTargets } from './gitChanges.js';
 import { buildImpactGraph, type ImpactMode } from './impactGraph.js';
 import { runPerformanceBenchmark, type PerformanceThresholds } from './performance.js';
 import { renderImpactGraphHtml } from './render.js';
 import { buildPatchRiskReport, type PatchRiskReport } from './riskReport.js';
 import { runValidationSuiteFile, validationMarkdown, type ValidationSuiteResult } from './validation.js';
+import { runReleasePublishGuardFromCli } from './releasePublishGuard.js';
+
+export { runReleasePublishGuardFromCli };
 
 type FailOn = 'never' | 'fail' | 'warn';
 
@@ -56,27 +60,164 @@ interface PerformanceCliArgs extends CommonArgs {
 
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
-  const command = argv[0];
-
-  if (command === 'benchmark') {
-    if (argv[1] === 'performance') {
-      await runPerformanceCommand(parsePerformanceArgs(argv.slice(2)));
+  const route = resolveCliRoute(argv);
+  if (route.command === 'help') {
+    if (printTopicHelp(route.helpTopic)) return;
+    if (route.args.length > 0) {
+      console.log(`Unknown help topic: ${route.helpTopic}`);
+    }
+    printHelp();
+    return;
+  }
+  if (route.command === 'version') {
+    console.log(`java-impact-flow ${getVersion()}`);
+    return;
+  }
+  if (route.command === 'impact') {
+    await runImpactCommand(parseImpactArgs(route.args));
+    return;
+  }
+  if (route.command === 'benchmark') {
+    if (route.args[0] === 'performance') {
+      await runPerformanceCommand(parsePerformanceArgs(route.args.slice(1)));
       return;
     }
     printBenchmarkHelp();
-    if (argv.includes('--help') || argv.includes('-h')) return;
+    if (route.args.includes('--help') || route.args.includes('-h')) {
+      return;
+    }
+    if (route.args.length > 0) {
+      const firstArg = route.args[0];
+      if (firstArg && !firstArg.startsWith('-') && firstArg.length > 0) {
+        const command = firstArg;
+        throw new Error(`Unknown benchmark command: ${command}. Use: benchmark performance.`);
+      }
+    }
     throw new Error('Unknown benchmark command. Use: benchmark performance.');
   }
-  if (command === 'risk') {
-    await runRiskCommand(parseRiskArgs(argv.slice(1)));
+  if (route.command === 'risk') {
+    await runRiskCommand(parseRiskArgs(route.args));
     return;
   }
-  if (command === 'validate') {
-    await runValidateCommand(parseValidateArgs(argv.slice(1)));
+  if (route.command === 'validate') {
+    await runValidateCommand(parseValidateArgs(route.args));
     return;
   }
+  if (route.command === 'release') {
+    runReleaseCommand(route.args);
+    return;
+  }
+  printHelp();
+  throw new Error(`Unknown command: ${route.commandArgument}.`);
+}
 
-  await runImpactCommand(parseImpactArgs(argv));
+export type CliCommand = 'help' | 'version' | 'impact' | 'benchmark' | 'risk' | 'validate' | 'release' | 'unknown';
+
+export interface CliRoute {
+  command: CliCommand;
+  args: string[];
+  commandArgument: string;
+  helpTopic?: string;
+}
+
+export function resolveCliRoute(argv: string[]): CliRoute {
+  const commandArgument = argv[0];
+  if (commandArgument === undefined) {
+    return { command: 'impact', args: argv, commandArgument: '' };
+  }
+  if (commandArgument === 'help' || commandArgument === '-h' || commandArgument === '--help') {
+    return {
+      command: 'help',
+      args: argv.slice(1),
+      commandArgument,
+      helpTopic: argv[1] ? argv[1].toLowerCase() : undefined,
+    };
+  }
+  if (commandArgument === 'version' || commandArgument === '-v' || commandArgument === '--version') {
+    return { command: 'version', args: argv.slice(1), commandArgument };
+  }
+  if (commandArgument.startsWith('--version=')) {
+    throw new Error('--version does not take a value.');
+  }
+  if (commandArgument.startsWith('-')) {
+    return { command: 'impact', args: argv, commandArgument };
+  }
+  if (commandArgument === 'benchmark') {
+    return { command: 'benchmark', args: argv.slice(1), commandArgument };
+  }
+  if (commandArgument === 'risk') {
+    return { command: 'risk', args: argv.slice(1), commandArgument };
+  }
+  if (commandArgument === 'validate') {
+    return { command: 'validate', args: argv.slice(1), commandArgument };
+  }
+  if (commandArgument === 'release') {
+    return { command: 'release', args: argv.slice(1), commandArgument };
+  }
+  return { command: 'unknown', args: argv.slice(1), commandArgument };
+}
+
+function printTopicHelp(topic: string | undefined): boolean {
+  if (!topic) return false;
+  switch (topic) {
+    case 'risk':
+      printRiskHelp();
+      return true;
+    case 'validate':
+      printValidateHelp();
+      return true;
+    case 'benchmark':
+      printBenchmarkHelp();
+      return true;
+    case 'release':
+      printReleaseHelp();
+      return true;
+    case 'help':
+      printHelp();
+      return true;
+    case 'version':
+      console.log('Usage:\n  java-impact-flow --version');
+      return true;
+    default:
+      return false;
+  }
+}
+
+
+export function getVersion(): string {
+  const packagePath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../package.json');
+  try {
+    const content = fs.readFileSync(packagePath, 'utf-8');
+    const parsed = JSON.parse(content);
+    const version = parsed?.version;
+    if (typeof version === 'string' && version.trim().length > 0) return version;
+  } catch {
+    return 'unknown';
+  }
+  return 'unknown';
+}
+
+interface FlagValue {
+  name: string;
+  value?: string;
+}
+
+function parseFlagValue(arg: string): FlagValue {
+  const equalsAt = arg.indexOf('=');
+  if (!arg.startsWith('--') || equalsAt <= 0) {
+    return { name: arg };
+  }
+  return { name: arg.slice(0, equalsAt), value: arg.slice(equalsAt + 1) };
+}
+
+function parseValueFrom(flag: FlagValue, next: () => string, template: string): string {
+  const value = flag.value ?? next();
+  if (!value) throw new Error(`Missing value after ${template}`);
+  return value;
+}
+
+function ensureNoValue(flag: FlagValue, template: string): void {
+  if (flag.value !== undefined) throw new Error(`${template} does not take a value.`);
 }
 
 async function runImpactCommand(args: ImpactCliArgs): Promise<void> {
@@ -276,10 +417,47 @@ async function runPerformanceCommand(args: PerformanceCliArgs): Promise<void> {
   if (!result.passed) process.exitCode = 1;
 }
 
-function parseImpactArgs(argv: string[]): ImpactCliArgs {
+type ReleaseCommandRunner = (args: string[]) => void;
+
+export function runReleaseCommand(args: string[], releaseRunner: ReleaseCommandRunner = runReleasePublishGuardFromCli): void {
+  if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
+    printReleaseHelp();
+    return;
+  }
+
+  const [subcommand, ...releaseArgs] = args;
+  if (!subcommand || subcommand.startsWith('-')) {
+    releaseRunner(args);
+    return;
+  }
+
+  switch (subcommand.toLowerCase()) {
+    case 'check': {
+      releaseRunner(releaseArgs);
+      return;
+    }
+    case 'publish': {
+      releaseRunner(['--publish', ...releaseArgs]);
+      return;
+    }
+    case 'ci': {
+      releaseRunner(['--skip-marketplace-check', '--smoke', '--json', ...releaseArgs]);
+      return;
+    }
+    case 'help':
+    case '--help':
+      printReleaseHelp();
+      return;
+    default:
+      throw new Error(`Unknown release command: ${subcommand}. Use: release check | release publish.`);
+  }
+}
+
+export function parseImpactArgs(argv: string[]): ImpactCliArgs {
   const result: ImpactCliArgs = { mode: 'references', includeTests: true };
   for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i] ?? '';
+    const flag = parseFlagValue(argv[i] ?? '');
+    const arg = flag.name;
     const next = () => {
       const value = argv[++i];
       if (!value) throw new Error(`Missing value after ${arg}`);
@@ -287,37 +465,39 @@ function parseImpactArgs(argv: string[]): ImpactCliArgs {
     };
     switch (arg) {
       case '--root':
-        result.root = next();
+        result.root = parseValueFrom(flag, next, '--root');
         break;
       case '--target':
       case '--symbol':
-        result.target = next();
+        result.target = parseValueFrom(flag, next, '--target');
         break;
       case '--mode':
-        result.mode = parseMode(next());
+        result.mode = parseMode(parseValueFrom(flag, next, '--mode'));
         break;
       case '--out':
-        result.out = next();
+        result.out = parseValueFrom(flag, next, '--out');
         break;
       case '--html-out':
-        result.htmlOut = next();
+        result.htmlOut = parseValueFrom(flag, next, '--html-out');
         break;
       case '--help':
       case '-h':
+        ensureNoValue(flag, arg);
         result.help = true;
         break;
       default:
-        if (parseCommonArg(result, arg, next)) break;
+        if (parseCommonArg(result, arg, () => parseValueFrom(flag, next, arg), flag.value)) break;
         throw new Error(`Unknown argument: ${arg}`);
     }
   }
   return result;
 }
 
-function parseRiskArgs(argv: string[]): RiskCliArgs {
+export function parseRiskArgs(argv: string[]): RiskCliArgs {
   const result: RiskCliArgs = { includeTests: true, failOn: 'fail' };
   for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i] ?? '';
+    const flag = parseFlagValue(argv[i] ?? '');
+    const arg = flag.name;
     const next = () => {
       const value = argv[++i];
       if (!value) throw new Error(`Missing value after ${arg}`);
@@ -325,38 +505,40 @@ function parseRiskArgs(argv: string[]): RiskCliArgs {
     };
     switch (arg) {
       case '--root':
-        result.root = next();
+        result.root = parseValueFrom(flag, next, '--root');
         break;
       case '--changed':
         break;
       case '--out':
-        result.out = next();
+        result.out = parseValueFrom(flag, next, '--out');
         break;
       case '--json-out':
-        result.jsonOut = next();
+        result.jsonOut = parseValueFrom(flag, next, '--json-out');
         break;
       case '--max-targets':
-        result.maxTargets = parsePositiveInt(next(), arg);
+        result.maxTargets = parsePositiveInt(parseValueFrom(flag, next, '--max-targets'), '--max-targets');
         break;
       case '--fail-on':
-        result.failOn = parseFailOn(next());
+        result.failOn = parseFailOn(parseValueFrom(flag, next, '--fail-on'));
         break;
       case '--help':
       case '-h':
+        ensureNoValue(flag, arg);
         result.help = true;
         break;
       default:
-        if (parseCommonArg(result, arg, next)) break;
+        if (parseCommonArg(result, arg, () => parseValueFrom(flag, next, arg), flag.value)) break;
         throw new Error(`Unknown argument: ${arg}`);
     }
   }
   return result;
 }
 
-function parseValidateArgs(argv: string[]): ValidateCliArgs {
+export function parseValidateArgs(argv: string[]): ValidateCliArgs {
   const result: ValidateCliArgs = { includeTests: true };
   for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i] ?? '';
+    const flag = parseFlagValue(argv[i] ?? '');
+    const arg = flag.name;
     const next = () => {
       const value = argv[++i];
       if (!value) throw new Error(`Missing value after ${arg}`);
@@ -364,31 +546,33 @@ function parseValidateArgs(argv: string[]): ValidateCliArgs {
     };
     switch (arg) {
       case '--suite':
-        result.suite = next();
+        result.suite = parseValueFrom(flag, next, '--suite');
         break;
       case '--out':
-        result.out = next();
+        result.out = parseValueFrom(flag, next, '--out');
         break;
       case '--markdown-out':
       case '--md-out':
-        result.markdownOut = next();
+        result.markdownOut = parseValueFrom(flag, next, '--markdown-out');
         break;
       case '--help':
       case '-h':
+        ensureNoValue(flag, arg);
         result.help = true;
         break;
       default:
-        if (parseCommonArg(result, arg, next)) break;
+        if (parseCommonArg(result, arg, () => parseValueFrom(flag, next, arg), flag.value)) break;
         throw new Error(`Unknown argument: ${arg}`);
     }
   }
   return result;
 }
 
-function parsePerformanceArgs(argv: string[]): PerformanceCliArgs {
+export function parsePerformanceArgs(argv: string[]): PerformanceCliArgs {
   const result: PerformanceCliArgs = { mode: 'patch-impact', includeTests: true };
   for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i] ?? '';
+    const flag = parseFlagValue(argv[i] ?? '');
+    const arg = flag.name;
     const next = () => {
       const value = argv[++i];
       if (!value) throw new Error(`Missing value after ${arg}`);
@@ -396,67 +580,81 @@ function parsePerformanceArgs(argv: string[]): PerformanceCliArgs {
     };
     switch (arg) {
       case '--root':
-        result.root = next();
+        result.root = parseValueFrom(flag, next, '--root');
         break;
       case '--target':
       case '--symbol':
-        result.target = next();
+        result.target = parseValueFrom(flag, next, '--target');
         break;
       case '--mode':
-        result.mode = parseMode(next());
+        result.mode = parseMode(parseValueFrom(flag, next, '--mode'));
         break;
       case '--out':
       case '--json-out':
-        result.out = next();
+        result.out = parseValueFrom(flag, next, arg);
         break;
       case '--cold-ms':
-        result.coldMs = parseNonNegativeNumber(next(), arg);
+        result.coldMs = parseNonNegativeNumber(parseValueFrom(flag, next, arg), arg);
         break;
       case '--warm-ms':
-        result.warmMs = parseNonNegativeNumber(next(), arg);
+        result.warmMs = parseNonNegativeNumber(parseValueFrom(flag, next, arg), arg);
         break;
       case '--min-trust-score':
-        result.minTrustScore = parseNonNegativeNumber(next(), arg);
+        result.minTrustScore = parseNonNegativeNumber(parseValueFrom(flag, next, arg), arg);
         break;
       case '--max-unresolved-calls':
-        result.maxUnresolvedCalls = parseNonNegativeInt(next(), arg);
+        result.maxUnresolvedCalls = parseNonNegativeInt(parseValueFrom(flag, next, arg), arg);
         break;
       case '--min-endpoints':
-        result.minEndpoints = parseNonNegativeInt(next(), arg);
+        result.minEndpoints = parseNonNegativeInt(parseValueFrom(flag, next, arg), arg);
         break;
       case '--min-suggested-tests':
-        result.minSuggestedTests = parseNonNegativeInt(next(), arg);
+        result.minSuggestedTests = parseNonNegativeInt(parseValueFrom(flag, next, arg), arg);
         break;
       case '--help':
       case '-h':
+        ensureNoValue(flag, arg);
         result.help = true;
         break;
       default:
-        if (parseCommonArg(result, arg, next)) break;
+        if (parseCommonArg(result, arg, () => parseValueFrom(flag, next, arg), flag.value)) break;
         throw new Error(`Unknown argument: ${arg}`);
     }
   }
   return result;
 }
 
-function parseCommonArg(result: CommonArgs, arg: string, next: () => string): boolean {
+export function parseCommonArg(
+  result: CommonArgs,
+  arg: string,
+  next: () => string,
+  explicitValue?: string,
+): boolean {
+  const readValue = () => {
+    const value = explicitValue ?? next();
+    if (!value) throw new Error(`Missing value after ${arg}`);
+    return value;
+  };
   switch (arg) {
     case '--max-files':
-      result.maxFiles = parseNonNegativeInt(next(), arg);
+      result.maxFiles = parseNonNegativeInt(readValue(), arg);
       return true;
     case '--max-file-bytes':
-      result.maxFileBytes = parsePositiveInt(next(), arg);
+      result.maxFileBytes = parsePositiveInt(readValue(), arg);
       return true;
     case '--max-nodes':
-      result.maxNodes = parsePositiveInt(next(), arg);
+      result.maxNodes = parsePositiveInt(readValue(), arg);
       return true;
     case '--max-edges':
-      result.maxEdges = parsePositiveInt(next(), arg);
+      result.maxEdges = parsePositiveInt(readValue(), arg);
       return true;
     case '--max-depth':
-      result.maxDepth = parseNonNegativeInt(next(), arg);
+      result.maxDepth = parseNonNegativeInt(readValue(), arg);
       return true;
     case '--no-tests':
+      if (explicitValue !== undefined) {
+        throw new Error('--no-tests does not take a value.');
+      }
       result.includeTests = false;
       return true;
     default:
@@ -521,29 +719,29 @@ function shouldFail(decision: PatchRiskReport['decision'], failOn: FailOn): bool
   return decision === 'fail';
 }
 
-function parseMode(value: string): ImpactMode {
+export function parseMode(value: string): ImpactMode {
   if (value === 'references' || value === 'call' || value === 'api-flow' || value === 'patch-impact') return value;
   throw new Error(`Invalid --mode ${value}. Use references, call, api-flow, or patch-impact.`);
 }
 
-function parseFailOn(value: string): FailOn {
+export function parseFailOn(value: string): FailOn {
   if (value === 'never' || value === 'fail' || value === 'warn') return value;
   throw new Error(`Invalid --fail-on ${value}. Use never, fail, or warn.`);
 }
 
-function parsePositiveInt(value: string, flag: string): number {
+export function parsePositiveInt(value: string, flag: string): number {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed <= 0) throw new Error(`${flag} must be a positive integer.`);
   return parsed;
 }
 
-function parseNonNegativeInt(value: string, flag: string): number {
+export function parseNonNegativeInt(value: string, flag: string): number {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 0) throw new Error(`${flag} must be 0 or a positive integer.`);
   return parsed;
 }
 
-function parseNonNegativeNumber(value: string, flag: string): number {
+export function parseNonNegativeNumber(value: string, flag: string): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed < 0) throw new Error(`${flag} must be 0 or a positive number.`);
   return parsed;
@@ -556,9 +754,16 @@ Usage:
   java-impact-flow --root <workspace> --target <Class|Class.method|field> [options]
   java-impact-flow risk --root <workspace> --changed [options]
   java-impact-flow validate --suite <validation.json> [options]
+  java-impact-flow release check|publish [options]
+  java-impact-flow release ci [options]
   java-impact-flow benchmark performance --root <workspace> --target <symbol> [options]
+  java-impact-flow --help | help [command]
+  java-impact-flow --version | -v | --version
 
 Impact options:
+  --root <workspace>
+  --target <Class|Class.method|field>
+  --symbol <Class|Class.method|field>    alias of --target
   --mode references|call|api-flow|patch-impact
   --out <graph.json>
   --html-out <graph.html>
@@ -570,6 +775,36 @@ Common options:
   --max-edges <n>
   --max-depth <n>       0 traces full depth up to the safety cap
   --no-tests
+`);
+}
+
+function printReleaseHelp(): void {
+  console.log(`Java Impact Flow release commands
+
+Usage:
+  java-impact-flow release check [options]
+  java-impact-flow release publish [options]
+
+release check:
+  --contract <contract.json>          Write JSON contract to file
+  --skip-marketplace-check            Skip Marketplace version lookup
+  --skip-smoke-check                  Skip VSIX smoke check
+  --smoke                             Enable smoke check (required in CI)
+  --smoke-max-size <bytes>            Override smoke package size limit
+  --smoke-max-entries <count>         Override smoke entry limit
+  --smoke-report <file>               Write smoke report to JSON file
+  --expected-package-hash <hash>       Require exact .vsix hash match before pass/publish
+  --json                              Emit release contract JSON to stdout
+
+release publish:
+  --allow-existing                    Allow republishing existing version
+  --skip-duplicate                    Pass --skip-duplicate to vsce publish
+  --dry-run                           Validate publish readiness and skip actual publish
+  --skip-marketplace-check             Skip Marketplace version lookup
+  --smoke                             Enable smoke check (required for publish)
+  --contract <contract.json>           Write JSON contract to file
+  --expected-package-hash <hash>       Require exact .vsix hash match before publish
+  --json                               Emit release contract JSON to stdout
 `);
 }
 
@@ -629,7 +864,7 @@ Usage:
 
 Options:
   --out <validation.json>
-  --markdown-out <validation.md>
+  --markdown-out <validation.md>    alias --md-out
   --max-files <n>
   --max-file-bytes <n>
   --max-depth <n>
@@ -637,7 +872,9 @@ Options:
 `);
 }
 
-main().catch(error => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
-});
+if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+  main().catch(error => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  });
+}

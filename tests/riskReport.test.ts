@@ -14,13 +14,171 @@ describe('patch risk report', () => {
       expect.objectContaining({
         file: 'src/test/java/example/OrderServiceTest.java',
         className: 'example.OrderServiceTest',
-        command: '.\\gradlew.bat test --tests "example.OrderServiceTest"',
+        command: './gradlew test --tests "example.OrderServiceTest"',
         why: 'Covers OrderService.findOrders via GET /orders with 1 evidence hit.',
         evidenceChain: [
           'Changed target: OrderService.findOrders',
           'Impacted endpoint: GET /orders',
           'Test evidence: src/test/java/example/OrderServiceTest.java',
         ],
+      }),
+    ]);
+  });
+
+  it('builds maven test command with -pl selector and class filter', () => {
+    const graph = sampleGraph({
+      target: 'AuthService.findUser',
+      endpointLabels: ['GET /users/{id}'],
+      testFiles: ['submodule/src/test/java/example/AuthServiceTest.java'],
+      buildSystem: { tool: 'maven', wrapper: 'mvnw' },
+    });
+
+    expect(suggestedTestsForGraph(graph, 1)).toEqual([
+      expect.objectContaining({
+        file: 'submodule/src/test/java/example/AuthServiceTest.java',
+        className: 'example.AuthServiceTest',
+        command: './mvnw -pl "submodule" -Dtest="AuthServiceTest" test',
+      }),
+    ]);
+  });
+
+  it('uses UNC-aware maven wrapper command in risk report suggestions', () => {
+    const graph = sampleGraph({
+      target: 'AuthService.findUser',
+      endpointLabels: ['GET /users/{id}'],
+      testFiles: ['submodule/src/test/java/example/AuthServiceTest.java'],
+      buildSystem: { tool: 'maven', wrapper: 'mvnw' },
+      root: '\\\\server\\\\share\\\\workspace',
+    });
+
+    expect(suggestedTestsForGraph(graph, 1)).toEqual([
+      expect.objectContaining({
+        command: '.\\mvnw.cmd -pl "submodule" -Dtest="AuthServiceTest" test',
+      }),
+    ]);
+  });
+
+  it('quotes the maven module path when it contains spaces', () => {
+    const graph = sampleGraph({
+      target: 'AuthService.findUser',
+      endpointLabels: ['GET /users/{id}'],
+      testFiles: ['core module/src/test/java/example/AuthServiceTest.java'],
+      buildSystem: { tool: 'maven', wrapper: 'mvnw' },
+    });
+
+    expect(suggestedTestsForGraph(graph, 1)).toEqual([
+      expect.objectContaining({
+        command: './mvnw -pl "core module" -Dtest="AuthServiceTest" test',
+      }),
+    ]);
+  });
+
+  it('deduplicates suggested tests for the same test file across path separator variants', () => {
+    const graph = sampleGraph({
+      target: 'AuthService.findUser',
+      endpointLabels: ['GET /users/{id}'],
+      testFiles: [
+        'core\\module\\src\\test\\java\\example\\AuthServiceTest.java',
+        'core/module/src/test/java/example/AuthServiceTest.java',
+      ],
+      buildSystem: { tool: 'maven', wrapper: 'mvnw' },
+    });
+
+    expect(suggestedTestsForGraph(graph)).toHaveLength(1);
+    expect(suggestedTestsForGraph(graph)[0]).toEqual(expect.objectContaining({
+      file: 'core/module/src/test/java/example/AuthServiceTest.java',
+      command: './mvnw -pl "core/module" -Dtest="AuthServiceTest" test',
+    }));
+  });
+
+  it('deduplicates top tests when merging patch risk suggestions from multiple graphs', () => {
+    const graphA = sampleGraph({
+      target: 'AuthService.findUser',
+      endpointLabels: ['GET /users/{id}'],
+      testFiles: ['core\\module\\src\\test\\java\\example\\AuthServiceTest.java'],
+      buildSystem: { tool: 'maven', wrapper: 'mvnw' },
+    });
+    const graphB = sampleGraph({
+      target: 'AuthService.resetPassword',
+      endpointLabels: ['POST /users/reset'],
+      testFiles: ['core/module/src/test/java/example/AuthServiceTest.java'],
+      buildSystem: { tool: 'maven', wrapper: 'mvnw' },
+    });
+
+    const report = buildPatchRiskReport([
+      {
+        target: 'AuthService.findUser',
+        file: 'src/main/java/example/AuthService.java',
+        line: 10,
+        kind: 'method',
+        reason: 'changed line',
+      },
+    ], [graphA, graphB]);
+
+    expect(report.topTests).toHaveLength(1);
+    expect(report.topTests[0]).toEqual(expect.objectContaining({
+      file: 'core/module/src/test/java/example/AuthServiceTest.java',
+      command: './mvnw -pl "core/module" -Dtest="AuthServiceTest" test',
+    }));
+  });
+
+  it('escapes quotes in the maven module path', () => {
+    const graph = sampleGraph({
+      target: 'AuthService.findUser',
+      endpointLabels: ['GET /users/{id}'],
+      testFiles: ['core "edge" service/src/test/java/example/AuthServiceTest.java'],
+      buildSystem: { tool: 'maven', wrapper: 'mvnw' },
+    });
+
+    expect(suggestedTestsForGraph(graph, 1)).toEqual([
+      expect.objectContaining({
+        command: './mvnw -pl "core \\"edge\\" service" -Dtest="AuthServiceTest" test',
+      }),
+    ]);
+  });
+
+  it('supports .cmd wrappers for Maven invocation', () => {
+    const graph = sampleGraph({
+      target: 'AuthService.findUser',
+      endpointLabels: ['GET /users/{id}'],
+      testFiles: ['submodule/src/test/java/example/AuthServiceTest.java'],
+      buildSystem: { tool: 'maven', wrapper: 'mvnw.cmd' },
+    });
+
+    expect(suggestedTestsForGraph(graph, 1)).toEqual([
+      expect.objectContaining({
+        command: './mvnw -pl "submodule" -Dtest="AuthServiceTest" test',
+      }),
+    ]);
+  });
+
+  it('normalizes Windows-style test paths when generating Maven commands', () => {
+    const graph = sampleGraph({
+      target: 'AuthService.findUser',
+      endpointLabels: ['GET /users/{id}'],
+      testFiles: ['submodule\\src\\test\\java\\example\\AuthServiceTest.java'],
+      buildSystem: { tool: 'maven', wrapper: 'mvnw' },
+    });
+
+    expect(suggestedTestsForGraph(graph, 1)).toEqual([
+      expect.objectContaining({
+        command: './mvnw -pl "submodule" -Dtest="AuthServiceTest" test',
+      }),
+    ]);
+  });
+
+  it('falls back to raw test command form for unknown build systems', () => {
+    const graph = sampleGraph({
+      target: 'AuthService.findUser',
+      endpointLabels: ['GET /users/{id}'],
+      testFiles: ['src/test/java/example/AuthServiceTest.java'],
+      buildSystem: { tool: 'unknown', wrapper: 'custom-runner' },
+    });
+
+    expect(suggestedTestsForGraph(graph, 1)).toEqual([
+      expect.objectContaining({
+        file: 'src/test/java/example/AuthServiceTest.java',
+        command: 'Run test class: example.AuthServiceTest',
       }),
     ]);
   });
@@ -81,6 +239,11 @@ function sampleGraph(input: {
   target: string;
   endpointLabels: string[];
   testFiles: string[];
+  root?: string;
+  buildSystem?: {
+    tool: 'gradle' | 'maven' | 'unknown';
+    wrapper?: string;
+  };
   trustLevel?: 'high' | 'medium' | 'low';
   trustScore?: number;
   unresolvedCalls?: number;
@@ -88,7 +251,6 @@ function sampleGraph(input: {
   return {
     schemaVersion: 1,
     metadata: {
-      root: '/workspace/repo',
       target: input.target,
       mode: 'patch-impact',
       generatedAt: '2026-06-21T00:00:00.000Z',
@@ -96,7 +258,8 @@ function sampleGraph(input: {
       fileLimit: 100000,
       truncated: false,
       skippedLargeFiles: 0,
-      buildSystem: { tool: 'gradle', wrapper: 'gradlew.bat' },
+      root: input.root ?? '/workspace/repo',
+      buildSystem: input.buildSystem ?? { tool: 'gradle', wrapper: 'gradlew.bat' },
       trust: {
         level: input.trustLevel ?? 'high',
         score: input.trustScore ?? 86,

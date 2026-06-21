@@ -3,6 +3,24 @@ import path from 'node:path';
 import { buildImpactGraph, type ImpactGraph, type ImpactMode } from './impactGraph.js';
 import { suggestedTestsForGraph } from './riskReport.js';
 
+const SUMMARY_ZERO: ImpactGraph['summary'] = {
+  javaFilesScanned: 0,
+  definitions: 0,
+  references: 0,
+  callSites: 0,
+  fieldReads: 0,
+  fieldWrites: 0,
+  endpoints: 0,
+  callbacks: 0,
+  frameworkAnnotations: 0,
+  flows: 0,
+  maxFlowDepth: 0,
+  tests: 0,
+  topFiles: [],
+};
+
+type UnknownRecord = Record<string, unknown>;
+
 export interface ValidationSuiteFile {
   name?: string;
   cases: ValidationCaseFile[];
@@ -81,14 +99,47 @@ export function readValidationSuite(file: string): ValidationSuiteFile {
 }
 
 export function parseValidationSuite(raw: string): ValidationSuiteFile {
-  const parsed = JSON.parse(raw) as ValidationSuiteFile;
-  if (!parsed || !Array.isArray(parsed.cases)) throw new Error('Validation suite must include a cases array.');
-  for (const item of parsed.cases) {
-    if (!item.name || !item.root || !item.target) {
-      throw new Error('Each validation case must include name, root, and target.');
-    }
+  const parsed: UnknownRecord = JSON.parse(raw) as UnknownRecord;
+  const cases = parsed.cases;
+  if (!parsed || typeof parsed !== 'object') throw new Error('Validation suite must be a JSON object.');
+  if (!Array.isArray(cases)) throw new Error('Validation suite must include a cases array.');
+  for (const rawCase of cases) {
+    validateValidationCase(rawCase);
   }
-  return parsed;
+  return parsed as unknown as ValidationSuiteFile;
+}
+
+function validateValidationCase(rawCase: unknown): void {
+  if (!rawCase || typeof rawCase !== 'object') {
+    throw new Error('Each validation case must be an object with name, root, and target.');
+  }
+  const item = rawCase as UnknownRecord;
+  const name = item.name;
+  const root = item.root;
+  const target = item.target;
+  if (typeof name !== 'string' || name.trim().length === 0) {
+    throw new Error('Each validation case must include a non-empty name.');
+  }
+  if (typeof root !== 'string' || root.trim().length === 0) {
+    throw new Error('Each validation case must include a non-empty root.');
+  }
+  if (typeof target !== 'string' || target.trim().length === 0) {
+    throw new Error('Each validation case must include a non-empty target.');
+  }
+  if (item.mode !== undefined && !isValidImpactMode(item.mode)) {
+    throw new Error(`Invalid validation case mode for "${name}": ${String(item.mode)}.`);
+  }
+  if (item.expect !== undefined && (!isRecord(item.expect) || Array.isArray(item.expect))) {
+    throw new Error(`Validation case "${name}" has invalid expect configuration.`);
+  }
+}
+
+function isRecord(value: unknown): value is UnknownRecord {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isValidImpactMode(value: unknown): value is ImpactMode {
+  return value === 'references' || value === 'call' || value === 'api-flow' || value === 'patch-impact';
 }
 
 export async function runValidationSuiteFile(
@@ -108,7 +159,30 @@ export async function runValidationSuite(
   const start = performance.now();
   const cases: ValidationCaseResult[] = [];
   for (const item of suite.cases.map(testCase => resolveCase(testCase, baseDir))) {
-    cases.push(await runValidationCase(item, options));
+    const caseStart = performance.now();
+    try {
+      cases.push(await runValidationCase(item, options));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      cases.push({
+        name: item.name,
+        root: item.rootDisplay,
+        target: item.target,
+        mode: item.mode ?? 'patch-impact',
+        passed: false,
+        durationMs: Math.round(performance.now() - caseStart),
+        failures: [`Validation failed while building impact graph for ${item.target}: ${message}`],
+        expected: item.expect ?? {},
+        actual: {
+          endpoints: [],
+          testClasses: [],
+          testFiles: [],
+          trust: { level: 'low', score: 0 },
+          unresolvedCalls: 0,
+          summary: SUMMARY_ZERO,
+        },
+      });
+    }
   }
   const passed = cases.filter(item => item.passed).length;
   const failed = cases.length - passed;

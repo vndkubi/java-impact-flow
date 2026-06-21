@@ -1,5 +1,6 @@
 import type { ChangedJavaTarget } from './gitChanges.js';
-import type { ImpactGraph, ProjectBuildSystem } from './impactGraph.js';
+import type { ImpactGraph } from './impactGraph.js';
+import { buildTestCommandForFile, isTestFile, normalizeTestFilePath, testClassNameFromFile } from './testCommand.js';
 
 export interface TestSuggestion {
   file: string;
@@ -68,8 +69,9 @@ export function suggestedTestsForGraph(graph: ImpactGraph, limit = 8): TestSugge
 
   for (const item of graph.evidence ?? []) {
     if (!item.file || (!isTestFile(item.file) && item.kind !== 'test')) continue;
-    const group = groups.get(item.file) ?? {
-      file: item.file,
+    const normalizedFile = normalizeTestFilePath(item.file);
+    const group = groups.get(normalizedFile) ?? {
+      file: normalizedFile,
       count: 0,
       line: item.line || 1,
       kinds: new Set<string>(),
@@ -79,7 +81,7 @@ export function suggestedTestsForGraph(graph: ImpactGraph, limit = 8): TestSugge
     group.line = Math.min(group.line, item.line || group.line);
     group.kinds.add(item.kind);
     group.score += 10 + (item.kind === 'test' ? 5 : 0) + Math.round(item.confidence * 5);
-    groups.set(item.file, group);
+    groups.set(normalizedFile, group);
   }
 
   return [...groups.values()].map(group => {
@@ -89,7 +91,7 @@ export function suggestedTestsForGraph(graph: ImpactGraph, limit = 8): TestSugge
     return {
       file: group.file,
       className,
-      command: testCommandForFile(group.file, graph.metadata.buildSystem),
+      command: buildTestCommandForFile(group.file, graph.metadata.buildSystem, graph.metadata.root),
       count: group.count,
       line: group.line,
       score: group.score + testNameBoost(group.file),
@@ -130,16 +132,18 @@ export function patchRiskMarkdown(report: Omit<PatchRiskReport, 'markdown'>): st
 function mergeTestSuggestions(graphs: ImpactGraph[]): TestSuggestion[] {
   const byFile = new Map<string, TestSuggestion>();
   for (const suggestion of graphs.flatMap(graph => suggestedTestsForGraph(graph))) {
-    const existing = byFile.get(suggestion.file);
+    const normalizedFile = normalizeTestFilePath(suggestion.file);
+    const keySuggestion = { ...suggestion, file: normalizedFile };
+    const existing = byFile.get(normalizedFile);
     if (!existing) {
-      byFile.set(suggestion.file, suggestion);
+      byFile.set(normalizedFile, keySuggestion);
       continue;
     }
-    existing.count += suggestion.count;
-    existing.score += suggestion.score;
-    existing.kinds = unique([...existing.kinds, ...suggestion.kinds]);
-    existing.evidenceChain = unique([...existing.evidenceChain, ...suggestion.evidenceChain]);
-    existing.why = `${existing.why} Also ${suggestion.why.charAt(0).toLowerCase()}${suggestion.why.slice(1)}`;
+    existing.count += keySuggestion.count;
+    existing.score += keySuggestion.score;
+    existing.kinds = unique([...existing.kinds, ...keySuggestion.kinds]);
+    existing.evidenceChain = unique([...existing.evidenceChain, ...keySuggestion.evidenceChain]);
+    existing.why = `${existing.why} Also ${keySuggestion.why.charAt(0).toLowerCase()}${keySuggestion.why.slice(1)}`;
   }
   return [...byFile.values()].sort((a, b) => b.score - a.score || b.count - a.count || a.file.localeCompare(b.file));
 }
@@ -174,60 +178,11 @@ function endpointLabelsForGraph(graph: ImpactGraph): string[] {
   ].filter(Boolean));
 }
 
-function testCommandForFile(file: string, buildSystem: ProjectBuildSystem): string {
-  const className = testClassNameFromFile(file);
-  const modulePath = modulePathForTestFile(file);
-  if (buildSystem.tool === 'gradle') {
-    const runner = commandRunner(buildSystem.wrapper || 'gradle');
-    const task = modulePath ? `:${modulePath.split('/').join(':')}:test` : 'test';
-    return `${runner} ${task} --tests "${className}"`;
-  }
-  if (buildSystem.tool === 'maven') {
-    const runner = commandRunner(buildSystem.wrapper || 'mvn');
-    const moduleFlag = modulePath ? ` -pl ${modulePath}` : '';
-    return `${runner}${moduleFlag} -Dtest=${simpleClassName(className)} test`;
-  }
-  return `Run test class: ${className}`;
-}
-
-function commandRunner(name: string): string {
-  if (name === 'gradlew.bat' || name === 'mvnw.cmd') return `.\\${name}`;
-  if (name === 'gradlew' || name === 'mvnw') return `./${name}`;
-  return name;
-}
-
-function modulePathForTestFile(file: string): string {
-  const normalized = file.replace(/\\/g, '/');
-  const marker = '/src/test/';
-  const index = normalized.indexOf(marker);
-  return index > 0 ? normalized.slice(0, index) : '';
-}
-
-function testClassNameFromFile(file: string): string {
-  const normalized = file.replace(/\\/g, '/');
-  const javaMarker = 'src/test/java/';
-  const javaIndex = normalized.indexOf(javaMarker);
-  if (javaIndex >= 0) return normalized.slice(javaIndex + javaMarker.length).replace(/\.java$/, '').split('/').join('.');
-  const testMarker = '/test/';
-  const testIndex = normalized.indexOf(testMarker);
-  if (testIndex >= 0) return normalized.slice(testIndex + '/test/'.length).replace(/\.java$/, '').split('/').join('.');
-  return simpleClassName(normalized.replace(/\.java$/, ''));
-}
-
-function simpleClassName(value: string): string {
-  return value.replace(/\\/g, '/').split('/').pop()?.split('.').filter(Boolean).pop() || value;
-}
-
 function testNameBoost(file: string): number {
   if (/ControllerTest\.java$/.test(file)) return 16;
   if (/ServiceTest\.java$/.test(file)) return 10;
   if (/RepositoryTest\.java$/.test(file)) return 6;
   return 0;
-}
-
-function isTestFile(file: string): boolean {
-  const normalized = file.replace(/\\/g, '/').toLowerCase();
-  return normalized.includes('/src/test/') || normalized.includes('/test/') || /test\.java$/.test(normalized);
 }
 
 function unique<T>(items: T[]): T[] {

@@ -1,0 +1,191 @@
+name: Release Health
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      run_publish:
+        description: "Run actual Marketplace publish (requires VSCE_PAT)"
+        required: false
+        default: false
+        type: boolean
+      allow_existing:
+        description: "Allow republish when version already exists"
+        required: false
+        default: false
+        type: boolean
+      skip_duplicate:
+        description: "Pass --skip-duplicate to vsce publish"
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-health-${{ github.workflow }}-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release-check:
+    name: Release Check
+    runs-on: ubuntu-latest
+    outputs:
+      package_hash: ${{ steps.release-check-contract.outputs.package_hash }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install
+        run: npm ci
+
+      - name: Verify release health
+        env:
+          VSIX_SMOKE_REPORT: ${{ runner.temp }}/release-smoke-check.json
+          VSIX_SMOKE_MAX_SIZE_BYTES: 10485760
+          VSIX_SMOKE_MAX_ENTRIES: 120
+        run: npm run release:verify
+
+      - name: Run release check contract
+        id: release-check-contract
+        env:
+          RELEASE_CHECK_JSON: release-check.json
+          VSIX_SMOKE_MAX_SIZE_BYTES: 10485760
+          VSIX_SMOKE_MAX_ENTRIES: 120
+        run: |
+          set -o pipefail
+          if ! npm run release:check:ci -- --contract "$RELEASE_CHECK_JSON"; then
+            echo "release:check command failed";
+            exit 1;
+          fi
+          node - <<'NODE'
+            const fs = require('fs');
+            const contractPath = process.env.RELEASE_CHECK_JSON;
+            if (!contractPath) {
+              console.error('RELEASE_CHECK_JSON is not configured');
+              process.exit(1);
+            }
+            const raw = fs.readFileSync(contractPath, 'utf8').trim();
+            if (!raw) {
+              console.error('release check contract is empty');
+              process.exit(1);
+            }
+            const result = JSON.parse(raw);
+            if (result.ok !== true) {
+              console.error(`release:check failed: ${result.error ?? 'unknown error'}`);
+              process.exit(1);
+            }
+            if (!result.smokeCheck || result.smokeCheck.ok !== true) {
+              console.error(`release check smoke gate failed for ${result.packagePath}`);
+              process.exit(1);
+            }
+            if (!result.packageHash) {
+              console.error('release:check contract is missing packageHash');
+              process.exit(1);
+            }
+            console.log(`release:check ok for ${result.manifest.name}@${result.manifest.version}`);
+            const outputFile = process.env.GITHUB_OUTPUT;
+            if (outputFile) {
+              const { appendFileSync } = require('fs');
+              appendFileSync(outputFile, `package_hash=${result.packageHash}\n`);
+            }
+          NODE
+      - name: Upload release check contract
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-check-contract
+          path: release-check.json
+          if-no-files-found: error
+
+  release-publish:
+    name: Publish to Marketplace
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_publish == true
+    runs-on: ubuntu-latest
+    needs: release-check
+    env:
+      VSCE_PAT: ${{ secrets.VSCE_PAT }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install
+        run: npm ci
+
+      - name: Guard and publish
+        env:
+          RELEASE_PUBLISH_JSON: release-publish.json
+          RELEASE_EXPECTED_PACKAGE_HASH: ${{ needs.release-check.outputs.package_hash }}
+          VSIX_SMOKE_MAX_SIZE_BYTES: 10485760
+          VSIX_SMOKE_MAX_ENTRIES: 120
+        run: |
+          if [ -z "$VSCE_PAT" ]; then
+            echo "VSCE_PAT secret is required for publish";
+            exit 1;
+          fi
+
+          set -o pipefail
+          PUBLISH_ARGS="--json"
+          if [ "${{ github.event.inputs.allow_existing }}" = "true" ] || [ "${{ github.event.inputs.allow_existing }}" = "True" ]; then
+            PUBLISH_ARGS="$PUBLISH_ARGS --allow-existing"
+          fi
+          if [ "${{ github.event.inputs.skip_duplicate }}" != "false" ] && [ "${{ github.event.inputs.skip_duplicate }}" != "False" ]; then
+            PUBLISH_ARGS="$PUBLISH_ARGS --skip-duplicate"
+          fi
+          if [ -n "$RELEASE_EXPECTED_PACKAGE_HASH" ]; then
+            PUBLISH_ARGS="$PUBLISH_ARGS --expected-package-hash $RELEASE_EXPECTED_PACKAGE_HASH"
+          fi
+          PUBLISH_ARGS="$PUBLISH_ARGS --smoke --contract $RELEASE_PUBLISH_JSON"
+
+          if ! npm run release:publish:json -- $PUBLISH_ARGS; then
+            echo "release:publish command failed";
+            exit 1;
+          fi
+          node - <<'NODE'
+            const fs = require('fs');
+            const contractPath = process.env.RELEASE_PUBLISH_JSON;
+            if (!contractPath) {
+              console.error('RELEASE_PUBLISH_JSON is not configured');
+              process.exit(1);
+            }
+            const raw = fs.readFileSync(contractPath, 'utf8').trim();
+            if (!raw) {
+              console.error('release publish contract is empty');
+              process.exit(1);
+            }
+            const result = JSON.parse(raw);
+            if (result.ok !== true) {
+              console.error(`release:publish failed: ${result.error ?? 'unknown error'}`);
+              process.exit(1);
+            }
+            if (!result.smokeCheck || result.smokeCheck.ok !== true) {
+              console.error(`release publish smoke gate failed for ${result.packagePath}`);
+              process.exit(1);
+            }
+            if (result.published !== true) {
+              console.error(`release:publish did not execute publish step for ${result.manifest?.name ?? 'unknown'}`);
+              process.exit(1);
+            }
+            console.log(`release:publish succeeded for ${result.manifest.name}@${result.manifest.version}`);
+          NODE
+      - name: Upload release publish contract
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-publish-contract
+          path: release-publish.json
+          if-no-files-found: error

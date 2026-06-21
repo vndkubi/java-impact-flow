@@ -21,9 +21,19 @@
     "Testing"
   ],
   "scripts": {
+    "vscode:prepublish": "npm run build",
+    "prepack": "npm run build",
     "build": "tsc -p .",
     "lint": "tsc --noEmit -p .",
     "demo": "node dist/cli.js",
+    "smoke:vsix": "npm run build --silent && node dist/vsixSmokeTest.js",
+    "release:verify": "npm run lint && npm run test -- --reporter=dot && npm run build && npm run validate:sample && npm run benchmark:performance && npx --yes @vscode/vsce package && npm run smoke:vsix",
+    "release:check": "node dist/cli.js release check",
+    "release:check:json": "node dist/cli.js release check --json",
+    "release:check:ci": "node dist/cli.js release ci --json",
+    "release:publish": "npm run release:verify && node dist/cli.js release publish",
+    "release:publish:dry-run": "npm run release:verify && node dist/cli.js release publish --dry-run --smoke --json",
+    "release:publish:json": "npm run release:verify && node dist/cli.js release publish --json",
     "validate:sample": "node dist/cli.js validate --suite validation/java-impact-flow.validation.json --out outputs/validation-report.json --markdown-out outputs/validation-report.md",
     "benchmark:performance": "node dist/cli.js benchmark performance --root validation/fixtures/spring-orders --target OrderService.findOrders --mode patch-impact --cold-ms 500 --warm-ms 100 --min-trust-score 50 --max-unresolved-calls 2 --min-endpoints 1 --min-suggested-tests 1 --out outputs/performance-report.json",
     "test": "vitest run"
