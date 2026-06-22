@@ -332,6 +332,64 @@ class Profile {
     expect(graph.flows[0]?.steps.some(step => step.target?.endsWith('Profile.name'))).toBe(true);
   });
 
+  it('generates endpoint flow when the target is a transitive middle-layer method', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ext-graph-'));
+    roots.push(root);
+    write(root, 'src/main/java/example/OrderController.java', `
+package example;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+@RestController
+@RequestMapping("/orders")
+class OrderController {
+  private final OrderService service = new OrderService();
+
+  @PostMapping("")
+  String create(OrderRequest request) {
+    return service.create(request);
+  }
+}
+class OrderRequest {}
+`);
+    write(root, 'src/main/java/example/OrderService.java', `
+package example;
+class OrderService {
+  private final OrderPolicy policy = new OrderPolicy();
+
+  String create(OrderRequest request) {
+    policy.validate(request);
+    return "ok";
+  }
+}
+`);
+    write(root, 'src/main/java/example/OrderPolicy.java', `
+package example;
+class OrderPolicy {
+  void validate(OrderRequest request) {
+    if (request == null) {
+      throw new IllegalArgumentException();
+    }
+  }
+}
+`);
+
+    const graph = await buildImpactGraph({
+      root,
+      target: 'OrderPolicy.validate',
+      mode: 'api-flow',
+      maxFiles: 50,
+      maxDepth: 8,
+    });
+
+    expect(graph.summary.endpoints).toBe(1);
+    expect(graph.flows).toHaveLength(1);
+    expect(graph.flows[0]?.endpoint?.path).toBe('/orders');
+    expect(graph.flows[0]?.steps.some(step => step.target?.endsWith('OrderService.create'))).toBe(true);
+    expect(graph.flows[0]?.steps.some(step => step.target?.endsWith('OrderPolicy.validate'))).toBe(true);
+    expect(graph.flows[0]?.mermaid).toContain('participant OrderPolicy as OrderPolicy');
+  });
+
   it('uses class names for mermaid sequence participants instead of method names', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ext-graph-'));
     roots.push(root);

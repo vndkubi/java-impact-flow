@@ -1,5 +1,12 @@
 # Change Log
 
+## 0.1.6 - 2026-06-22
+
+- Fixed API-flow generation for targets in middle service/policy layers by
+  finding upstream endpoint handlers through resolved reverse call chains.
+- Added regression coverage for controller-to-service-to-policy call paths so
+  middle-layer methods still generate endpoint sequence output.
+
 ## 0.1.5 - 2026-06-22
 
 - Updated API-flow sequence participants to model class-layer actors instead of

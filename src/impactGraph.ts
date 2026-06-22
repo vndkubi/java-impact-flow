@@ -1038,16 +1038,105 @@ function findRelatedEndpoints(
     ...definitions.map(item => item.file),
     ...references.slice(0, 200).map(item => item.file),
   ]);
+  const upstreamHandlers = upstreamMethodFqNamesForTarget(facts, target, definitions);
   return facts
     .flatMap(fact => fact.endpoints)
     .filter(endpoint =>
       relatedFiles.has(endpoint.file)
+      || upstreamHandlers.has(endpoint.handler)
       || endpoint.owner?.toLowerCase() === target.loweredSimple
       || (target.owner !== undefined && endpoint.owner?.toLowerCase() === target.loweredOwner)
       || endpoint.handler.toLowerCase().includes(target.loweredSimple)
       || endpoint.path.toLowerCase().includes(target.loweredSimple))
     .sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line)
     .slice(0, 40);
+}
+
+function upstreamMethodFqNamesForTarget(
+  facts: JavaFileFacts[],
+  target: TargetParts,
+  definitions: JavaSymbol[],
+): Set<string> {
+  const methodIndex = buildMethodIndexes(facts);
+  const seeds = seedMethodsForTarget(facts, target, definitions);
+  if (seeds.length === 0) return new Set();
+
+  const reverseCalls = new Map<string, Set<string>>();
+  for (const method of facts.flatMap(fact => fact.methods)) {
+    for (const callee of resolvedMethodTargetsForMethod(facts, methodIndex, method)) {
+      const callers = reverseCalls.get(callee) ?? new Set<string>();
+      callers.add(method.fqName);
+      reverseCalls.set(callee, callers);
+    }
+  }
+
+  const upstream = new Set(seeds.map(method => method.fqName));
+  const queue = seeds.map(method => ({ fqName: method.fqName, depth: 0 }));
+  for (let index = 0; index < queue.length; index++) {
+    const current = queue[index]!;
+    if (current.depth >= 8) continue;
+    for (const caller of reverseCalls.get(current.fqName) ?? []) {
+      if (upstream.has(caller)) continue;
+      upstream.add(caller);
+      queue.push({ fqName: caller, depth: current.depth + 1 });
+    }
+  }
+  return upstream;
+}
+
+function seedMethodsForTarget(facts: JavaFileFacts[], target: TargetParts, definitions: JavaSymbol[]): JavaSymbol[] {
+  const seeds = new Map<string, JavaSymbol>();
+  const ownerSeeds = new Set<string>();
+
+  for (const definition of definitions) {
+    if (definition.kind === 'method') {
+      seeds.set(symbolKey(definition), definition);
+      continue;
+    }
+    if (definition.kind === 'field' && definition.owner) ownerSeeds.add(definition.owner.toLowerCase());
+    if (definition.kind === 'class' || definition.kind === 'interface' || definition.kind === 'enum' || definition.kind === 'record') {
+      ownerSeeds.add(definition.name.toLowerCase());
+    }
+  }
+  if (!target.owner) ownerSeeds.add(target.loweredSimple);
+
+  for (const method of facts.flatMap(fact => fact.methods)) {
+    if (symbolMatchesTarget(method, target) || (method.owner && ownerSeeds.has(method.owner.toLowerCase()))) {
+      seeds.set(symbolKey(method), method);
+    }
+  }
+  return [...seeds.values()];
+}
+
+function resolvedMethodTargetsForMethod(
+  facts: JavaFileFacts[],
+  methodIndex: MethodIndexes,
+  method: JavaSymbol,
+): Set<string> {
+  const targets = new Set<string>();
+  const fact = facts.find(item => item.file === method.file);
+  if (!fact) return targets;
+  const range = methodBodyRange(fact.methods, method);
+  const callbacksByLine = new Map(fact.callbacks.map(callback => [callback.line, callback]));
+  const receiverTypes = receiverTypesForMethod(methodIndex, method);
+
+  for (let lineNo = range.start; lineNo <= range.end; lineNo++) {
+    const raw = fact.lines[lineNo - 1] ?? '';
+    if (!raw.trim() || lineNo === method.line) continue;
+    for (const local of localVariablesFromLine(raw)) receiverTypes.set(local.name, local.typeName);
+
+    const callback = callbacksByLine.get(lineNo);
+    if (callback) {
+      const resolved = resolveCallbackTargetFromIndex(methodIndex, callback, method, receiverTypes);
+      if (resolved) targets.add(resolved.fqName);
+    }
+
+    for (const call of callsFromLine(raw).slice(0, 8)) {
+      const resolved = resolveCallTarget(methodIndex, call, method, receiverTypes);
+      if (resolved) targets.add(resolved.fqName);
+    }
+  }
+  return targets;
 }
 
 function assembleGraph(input: {
