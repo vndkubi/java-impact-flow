@@ -1038,12 +1038,19 @@ function findRelatedEndpoints(
     ...definitions.map(item => item.file),
     ...references.slice(0, 200).map(item => item.file),
   ]);
-  const upstreamHandlers = upstreamMethodFqNamesForTarget(facts, target, definitions);
+  const methodIndex = buildMethodIndexes(facts);
+  const seedMethods = seedMethodsForTarget(facts, target, definitions);
+  const downstreamMethods = downstreamMethodFqNamesForSeeds(facts, methodIndex, seedMethods);
+  const endpointCandidateSeeds = [...downstreamMethods]
+    .map(fqName => methodIndex.byFqName.get(fqName))
+    .filter((method): method is JavaSymbol => method !== undefined);
+  const upstreamHandlers = upstreamMethodFqNamesForSeeds(facts, methodIndex, endpointCandidateSeeds);
+  const relatedHandlers = new Set([...downstreamMethods, ...upstreamHandlers]);
   return facts
     .flatMap(fact => fact.endpoints)
     .filter(endpoint =>
       relatedFiles.has(endpoint.file)
-      || upstreamHandlers.has(endpoint.handler)
+      || relatedHandlers.has(endpoint.handler)
       || endpoint.owner?.toLowerCase() === target.loweredSimple
       || (target.owner !== undefined && endpoint.owner?.toLowerCase() === target.loweredOwner)
       || endpoint.handler.toLowerCase().includes(target.loweredSimple)
@@ -1052,13 +1059,34 @@ function findRelatedEndpoints(
     .slice(0, 40);
 }
 
-function upstreamMethodFqNamesForTarget(
+function downstreamMethodFqNamesForSeeds(
   facts: JavaFileFacts[],
-  target: TargetParts,
-  definitions: JavaSymbol[],
+  methodIndex: MethodIndexes,
+  seeds: JavaSymbol[],
 ): Set<string> {
-  const methodIndex = buildMethodIndexes(facts);
-  const seeds = seedMethodsForTarget(facts, target, definitions);
+  if (seeds.length === 0) return new Set();
+
+  const downstream = new Set(seeds.map(method => method.fqName));
+  const queue = seeds.map(method => ({ method, depth: 0 }));
+  for (let index = 0; index < queue.length; index++) {
+    const current = queue[index]!;
+    if (current.depth >= 8) continue;
+    for (const callee of resolvedMethodTargetsForMethod(facts, methodIndex, current.method)) {
+      if (downstream.has(callee)) continue;
+      const method = methodIndex.byFqName.get(callee);
+      if (!method) continue;
+      downstream.add(callee);
+      queue.push({ method, depth: current.depth + 1 });
+    }
+  }
+  return downstream;
+}
+
+function upstreamMethodFqNamesForSeeds(
+  facts: JavaFileFacts[],
+  methodIndex: MethodIndexes,
+  seeds: JavaSymbol[],
+): Set<string> {
   if (seeds.length === 0) return new Set();
 
   const reverseCalls = new Map<string, Set<string>>();
@@ -1087,6 +1115,9 @@ function upstreamMethodFqNamesForTarget(
 function seedMethodsForTarget(facts: JavaFileFacts[], target: TargetParts, definitions: JavaSymbol[]): JavaSymbol[] {
   const seeds = new Map<string, JavaSymbol>();
   const ownerSeeds = new Set<string>();
+  const targetTestClassFiles = new Set(definitions
+    .filter(definition => isClassLikeSymbol(definition) && isTestPath(definition.file))
+    .map(definition => definition.file));
 
   for (const definition of definitions) {
     if (definition.kind === 'method') {
@@ -1101,11 +1132,19 @@ function seedMethodsForTarget(facts: JavaFileFacts[], target: TargetParts, defin
   if (!target.owner) ownerSeeds.add(target.loweredSimple);
 
   for (const method of facts.flatMap(fact => fact.methods)) {
-    if (symbolMatchesTarget(method, target) || (method.owner && ownerSeeds.has(method.owner.toLowerCase()))) {
+    if (
+      symbolMatchesTarget(method, target)
+      || (method.owner && ownerSeeds.has(method.owner.toLowerCase()))
+      || targetTestClassFiles.has(method.file)
+    ) {
       seeds.set(symbolKey(method), method);
     }
   }
   return [...seeds.values()];
+}
+
+function isClassLikeSymbol(symbol: JavaSymbol): boolean {
+  return symbol.kind === 'class' || symbol.kind === 'interface' || symbol.kind === 'enum' || symbol.kind === 'record';
 }
 
 function resolvedMethodTargetsForMethod(

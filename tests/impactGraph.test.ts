@@ -412,6 +412,78 @@ class OrderPolicy {
     expect(graph.flows[0]?.mermaid).toContain('participant OrderPolicy as OrderPolicy');
   });
 
+  it('finds endpoint sequence flow when the target is a top-level test class', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ext-graph-'));
+    roots.push(root);
+    write(root, 'src/main/java/example/BookController.java', `
+package example;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+@RestController
+@RequestMapping("/books")
+class BookController {
+  private final BookService service = new BookService();
+
+  @PostMapping("/blocks")
+  BookBlock create(CreateBookBlockFromContentRequest request) {
+    return service.create(request);
+  }
+}
+class BookService {
+  BookBlock create(CreateBookBlockFromContentRequest request) {
+    return new BookBlock();
+  }
+}
+class BookBlock {}
+class CreateBookBlockFromContentRequest {
+  CreateBookBlockFromContentRequest(String content) {}
+}
+`);
+    write(root, 'src/test/java/example/BookControllerTest.java', `
+package example;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+class BookControllerTest {
+  @Nested
+  class CreateBookBlockFromContent {
+    private final BookController controller = new BookController();
+
+    @Test
+    void createsBlock() {
+      controller.create(splitRequest("intro"));
+    }
+
+    private CreateBookBlockFromContentRequest splitRequest(String content) {
+      return new CreateBookBlockFromContentRequest(content);
+    }
+  }
+}
+`);
+
+    const graph = await buildImpactGraph({
+      root,
+      target: 'BookControllerTest',
+      mode: 'api-flow',
+      maxFiles: 50,
+      maxDepth: 6,
+    });
+
+    const targets = graph.flows[0]?.steps.map(step => step.target ?? '') ?? [];
+    expect(graph.summary.endpoints).toBe(1);
+    expect(graph.summary.flows).toBe(1);
+    expect(graph.flows[0]?.endpoint?.path).toBe('/books/blocks');
+    expect(targets.some(target => target.endsWith('BookController.create'))).toBe(true);
+    expect(targets.some(target => target.endsWith('BookService.create'))).toBe(true);
+    expect(graph.flows[0]?.mermaid).toContain('participant BookController as BookController');
+
+    const html = renderImpactGraphHtml(graph, { initialTab: 'static-debug' });
+    expect(html).toContain('"title":"Enter POST /books/blocks"');
+    const match = /const staticDebuggerSessions = (\[[\s\S]*?\]);/.exec(html);
+    const sessions = JSON.parse(match?.[1] ?? '[]') as Array<{ steps?: unknown[] }>;
+    expect(sessions[0]?.steps?.length).toBeGreaterThan(0);
+  });
+
   it('traces full injected service and client layers through interface receivers', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ext-graph-'));
     roots.push(root);

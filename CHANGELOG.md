@@ -1,5 +1,13 @@
 # Change Log
 
+## 0.1.9 - 2026-06-22
+
+- Fixed API-flow and Static Debug behavior when the selected target is a
+  top-level JUnit test class instead of a production controller or service.
+- Traces from related test methods into downstream controller/service calls so
+  endpoint sequence diagrams are no longer replaced by the empty no-flow state.
+- Added regression coverage for nested JUnit tests calling controller endpoints.
+
 ## 0.1.8 - 2026-06-22
 
 - Improved API-flow traversal across injected service and client layers instead
