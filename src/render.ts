@@ -484,6 +484,9 @@ export function renderImpactGraphHtml(graph: ImpactGraph, options: RenderImpactG
       background: var(--panel-3);
       box-shadow: var(--shadow);
     }
+    .message-label { paint-order: stroke; stroke: var(--bg); stroke-width: 4; stroke-linejoin: round; }
+    .message-meta { paint-order: stroke; stroke: var(--bg); stroke-width: 3; stroke-linejoin: round; }
+    .message-route { fill: var(--target); font-size: 9px; font-weight: 760; }
     .message { cursor: pointer; }
     .message:hover text.label { fill: var(--target); }
     .message.selected .message-line, .message.selected path { stroke: var(--selected); stroke-width: 2.8; }
@@ -523,6 +526,23 @@ export function renderImpactGraphHtml(graph: ImpactGraph, options: RenderImpactG
       height: 8px;
       border-radius: 999px;
       display: inline-flex;
+    }
+    .sequence-hint {
+      min-height: 28px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 12px;
+      border-bottom: 1px solid var(--border);
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.25;
+      background: color-mix(in srgb, var(--panel) 92%, #000 8%);
+    }
+    .sequence-hint strong {
+      color: var(--target);
+      font-weight: 760;
     }
     .mermaid-box {
       border-top: 1px solid var(--border);
@@ -891,6 +911,7 @@ export function renderImpactGraphHtml(graph: ImpactGraph, options: RenderImpactG
           </div>
           <div class="sequence-stage">
             <div id="sequenceLegend" class="sequence-legend" role="note" aria-label="Sequence legend"></div>
+            <div id="sequenceHint" class="sequence-hint" role="status" aria-live="polite">Select an API flow step to inspect details.</div>
             <div id="sequenceScroller" class="sequence-scroller">
               <svg id="sequenceSvg" class="sequence-svg" role="img" aria-label="API sequence flow"></svg>
             </div>
@@ -1284,9 +1305,27 @@ ${webviewMessageTypesJs}
       document.getElementById('flowCrumbMeta').textContent = flow.endpoint?.handler || flow.label;
       document.getElementById('mermaidText').textContent = flow.mermaid || '';
       renderSequenceLegend(model.messages);
+      renderSequenceHint(flow, model);
       drawSequence(flow, model);
       renderFlowDiagnostics(flow);
       renderFlowSteps(flow);
+    }
+
+    function renderSequenceHint(flow, model) {
+      const hint = document.getElementById('sequenceHint');
+      if (!hint) return;
+      if (!flow) {
+        hint.innerHTML = '<span>No flow selected.</span>';
+        return;
+      }
+      const counts = summarizeSequenceKinds(model.messages);
+      const unresolvedCount = flow.diagnostics?.unresolvedCalls || 0;
+      const kindOrder = ['endpoint', 'handler', 'call', 'return', 'throw', 'branch', 'loop', 'exception', 'method_reference', 'lambda', 'annotation'];
+      const headline = kindOrder.find(kind => counts[kind]) || Object.keys(counts)[0] || 'step';
+      const lead = model.messages.length + ' / ' + (model.messages.length + 1) + ' transitions';
+      const unresolved = unresolvedCount > 0 ? ' | ' + unresolvedCount + ' unresolved' : '';
+      hint.innerHTML = '<strong>' + escapeHtml(sequenceKindLabel(headline)) + '</strong> flow across <strong>' + model.participants.length + '</strong> participants | ' +
+        '<span>' + escapeHtml(lead) + unresolved + ' | max depth ' + flow.maxDepth + '</span>';
     }
 
     function drawSequence(flow, model = sequenceModel(flow)) {
@@ -1362,6 +1401,9 @@ ${webviewMessageTypesJs}
         const x2 = same ? from.x + 72 : to.x;
         const color = sequenceColor(message.kind);
         const arrowX = same ? x1 + 72 : (x1 + x2) / 2;
+        const source = stepById.get(message.stepId);
+        const confidence = Math.max(0, Math.min(1, source?.confidence ?? 1));
+        const lineOpacity = String(Math.max(0.42, 0.35 + confidence * 0.55));
         if (same) {
           const path = svgEl('path', {
             class: 'message-line',
@@ -1370,6 +1412,7 @@ ${webviewMessageTypesJs}
             stroke: color,
             'stroke-width': 1.7,
             'stroke-dasharray': lineStyle,
+            'stroke-opacity': lineOpacity,
             'marker-end': 'url(#' + markerId + ')',
           });
           group.appendChild(path);
@@ -1383,6 +1426,7 @@ ${webviewMessageTypesJs}
             stroke: color,
             'stroke-width': 1.7,
             'stroke-dasharray': lineStyle,
+            'stroke-opacity': lineOpacity,
             'marker-end': 'url(#' + markerId + ')',
           });
           group.appendChild(line);
@@ -1390,31 +1434,25 @@ ${webviewMessageTypesJs}
         const badge = svgEl('circle', { cx: Math.min(x1, x2) + 16, cy: y - 17, r: 11, fill: '#111722', stroke: color });
         const badgeText = svgEl('text', { x: Math.min(x1, x2) + 16, y: y - 13, 'text-anchor': 'middle', 'font-size': 9, 'font-weight': 760, fill: '#e7edf6' });
         badgeText.textContent = String(index + 1);
-        const kind = svgEl('text', {
-          x: Math.min(x1, x2) + 16,
-          y: y - 28,
-          'text-anchor': 'middle',
-          'font-size': 8,
-          fill: '#9aa6b8',
-        });
-        kind.textContent = sequenceKindLabel(message.kind);
         const endpointMeta = message.kind === 'return' ? 'return' : message.kind;
         group.appendChild(badge);
         group.appendChild(badgeText);
-        group.appendChild(kind);
         if (state.showLabels) {
           const labelX = same ? x1 + 92 : (x1 + x2) / 2;
+          const routeLabel = svgEl('text', { class: 'message-route label', x: labelX, y: y - 28, 'text-anchor': same ? 'start' : 'middle', 'font-size': 9 });
+          routeLabel.textContent = sequenceDirectionLabel(message.kind, from.label, to.label);
+          group.appendChild(routeLabel);
           const label = svgEl('text', { class: 'label', x: labelX, y: y - 10, 'text-anchor': same ? 'start' : 'middle', 'font-size': 12, 'font-weight': 650, fill: '#e7edf6' });
+          label.setAttribute('class', 'label message-label');
           label.textContent = trimLabel(message.label, same ? 34 : 48);
           const loc = svgEl('text', { x: labelX, y: y + 18, 'text-anchor': same ? 'start' : 'middle', 'font-size': 10, fill: '#9aa6b8' });
-          const flowDirection = sequenceDirectionLabel(message.kind, from.label, to.label);
-          const endpointHint = endpointMeta === 'return' ? ' - ' + endpointMeta : '';
-          loc.textContent = message.fileLine + ' | ' + flowDirection + endpointHint;
+          const endpointHint = endpointMeta === 'return' ? ' | return' : '';
+          loc.setAttribute('class', 'message-meta');
+          loc.textContent = message.fileLine + (endpointHint ? endpointHint : '');
           group.appendChild(label);
           group.appendChild(loc);
         }
         if (state.showLabels && message.fileLine) {
-          const source = stepById.get(message.stepId);
           const confidenceLine = svgEl('text', {
             x: arrowX,
             y: y + 34,
@@ -1429,6 +1467,19 @@ ${webviewMessageTypesJs}
             group.appendChild(confidenceLine);
           }
         }
+        const title = svgEl('title', {});
+        const lineDetails = [];
+        if (source) {
+          lineDetails.push('kind: ' + sequenceKindLabel(source.kind));
+          lineDetails.push('confidence: ' + Math.round(source.confidence * 100) + '%');
+          lineDetails.push('file: ' + message.fileLine);
+        }
+        const route = sequenceDirectionLabel(message.kind, from.label, to.label);
+        title.textContent = [
+          String(index + 1) + '. ' + escapeHtml(message.label),
+          route,
+        ].concat(lineDetails).join('\\n');
+        group.appendChild(title);
         group.onclick = () => selectFlowStep(flow.steps.find(step => step.id === message.stepId));
         sequenceSvg.appendChild(group);
       });
@@ -1628,14 +1679,19 @@ ${webviewMessageTypesJs}
     function sequenceDirectionLabel(kind, fromLabel, toLabel) {
       const from = String(fromLabel || '');
       const to = String(toLabel || '');
+      if (!from || !to) {
+        return sequenceKindLabel(kind);
+      }
+      if (from === to) {
+        return sequenceKindLabel(kind) + ' | ' + from;
+      }
       if (kind === 'return' || kind === 'throw') {
-        return 'response ' + (from ? 'from ' + from : '') + (to ? (from ? ' to ' + to : 'to ' + to) : '');
+        return sequenceKindLabel(kind) + ' : ' + to + ' <- ' + from;
       }
       if (kind === 'branch' || kind === 'loop' || kind === 'exception') {
-        return kind;
+        return sequenceKindLabel(kind) + ' | ' + from + ' -> ' + to;
       }
-      if (!from || !to || from === to) return from || to || kind;
-      return from + ' -> ' + to;
+      return sequenceKindLabel(kind) + ': ' + from + ' -> ' + to;
     }
 
     function markerDef(id, color) {

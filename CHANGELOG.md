@@ -1,5 +1,22 @@
 # Change Log
 
+## 0.1.4 - 2026-06-22
+
+- Published as next release with sequence UI readability upgrades for
+  API-flow tracing, including clearer directional route labels and route
+  confidence cues.
+
+- Updated webview sequence hint summary and transition metadata exposure for more
+  reliable interpretation during impact analysis.
+
+## 0.1.3 - 2026-06-22
+
+- Improved API sequence UI readability with clearer directional call annotations,
+  confidence-aware transition emphasis, and a sequence helper hint bar.
+- Added route-focused labels and hover tooltips for sequence transitions to
+  reduce ambiguity when tracing API flow.
+- Added compact sequence summary in the webview for easier flow interpretation.
+
 ## 0.1.2 - 2026-06-21
 
 - Added a validation pack runner for expected endpoint, suggested-test, trust,
