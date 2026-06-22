@@ -657,7 +657,7 @@ function scanElasticsearchRoutes(
   const result: Array<{ endpoint: JavaEndpoint }> = [];
   const routeMethods = methods.filter(method => method.name === 'routes' && method.owner);
   for (const routeMethod of routeMethods) {
-    const range = methodBodyRange(methods, routeMethod);
+    const range = methodBodyRange(methods, routeMethod, lines);
     const handler = methods.find(method => method.owner === routeMethod.owner && method.name === 'prepareRequest')
       ?? methods.find(method => method.owner === routeMethod.owner && method.name === 'handleRequest')
       ?? routeMethod;
@@ -1116,7 +1116,7 @@ function resolvedMethodTargetsForMethod(
   const targets = new Set<string>();
   const fact = facts.find(item => item.file === method.file);
   if (!fact) return targets;
-  const range = methodBodyRange(fact.methods, method);
+  const range = methodBodyRange(fact.methods, method, fact.lines);
   const callbacksByLine = new Map(fact.callbacks.map(callback => [callback.line, callback]));
   const receiverTypes = receiverTypesForMethod(methodIndex, method);
 
@@ -1765,7 +1765,7 @@ function traceMethodFlow(input: {
   if (input.depth >= input.maxDepth) return;
   const fact = input.facts.find(item => item.file === input.method.file);
   if (!fact) return;
-  const range = methodBodyRange(fact.methods, input.method);
+  const range = methodBodyRange(fact.methods, input.method, fact.lines);
   const callbacksByLine = new Map(fact.callbacks.map(callback => [callback.line, callback]));
   const receiverTypes = receiverTypesForMethod(input.methodIndex, input.method);
   for (let lineNo = range.start; lineNo <= range.end && input.steps.length < 200; lineNo++) {
@@ -1900,6 +1900,7 @@ interface MethodIndexes {
   byOwnerAndSimple: Map<string, JavaSymbol[]>;
   classesBySimple: Map<string, JavaSymbol[]>;
   fieldsByOwner: Map<string, JavaSymbol[]>;
+  implementorsByInterface: Map<string, string[]>;
 }
 
 function buildMethodIndexes(facts: JavaFileFacts[]): MethodIndexes {
@@ -1908,8 +1909,12 @@ function buildMethodIndexes(facts: JavaFileFacts[]): MethodIndexes {
   const byOwnerAndSimple = new Map<string, JavaSymbol[]>();
   const classesBySimple = new Map<string, JavaSymbol[]>();
   const fieldsByOwner = new Map<string, JavaSymbol[]>();
+  const implementorsByInterface = new Map<string, string[]>();
   for (const classSymbol of facts.flatMap(fact => fact.classes)) {
     classesBySimple.set(classSymbol.name, [...(classesBySimple.get(classSymbol.name) ?? []), classSymbol]);
+    for (const interfaceName of implementedInterfacesFromSignature(classSymbol.signature)) {
+      implementorsByInterface.set(interfaceName, [...(implementorsByInterface.get(interfaceName) ?? []), classSymbol.name]);
+    }
   }
   for (const field of facts.flatMap(fact => fact.fields)) {
     if (field.owner) fieldsByOwner.set(field.owner, [...(fieldsByOwner.get(field.owner) ?? []), field]);
@@ -1922,10 +1927,21 @@ function buildMethodIndexes(facts: JavaFileFacts[]): MethodIndexes {
       byOwnerAndSimple.set(key, [...(byOwnerAndSimple.get(key) ?? []), method]);
     }
   }
-  return { byFqName, bySimple, byOwnerAndSimple, classesBySimple, fieldsByOwner };
+  return { byFqName, bySimple, byOwnerAndSimple, classesBySimple, fieldsByOwner, implementorsByInterface };
 }
 
-function methodBodyRange(methods: JavaSymbol[], method: JavaSymbol): { start: number; end: number } {
+function implementedInterfacesFromSignature(signature?: string): string[] {
+  if (!signature) return [];
+  const match = signature.match(/\bimplements\s+([^{]+)/);
+  if (!match) return [];
+  return splitTopLevel(match[1] ?? '', ',')
+    .map(typeName => simpleTypeName(cleanTypeName(typeName) ?? ''))
+    .filter(Boolean);
+}
+
+function methodBodyRange(methods: JavaSymbol[], method: JavaSymbol, lines?: string[]): { start: number; end: number } {
+  const braceRange = lines ? methodBodyBraceRange(lines, method.line) : undefined;
+  if (braceRange) return braceRange;
   const sorted = methods.slice().sort((a, b) => a.line - b.line);
   const index = sorted.findIndex(candidate => symbolKey(candidate) === symbolKey(method));
   const next = index >= 0 ? sorted[index + 1] : undefined;
@@ -1933,6 +1949,34 @@ function methodBodyRange(methods: JavaSymbol[], method: JavaSymbol): { start: nu
     start: method.line,
     end: next ? Math.max(method.line, next.line - 1) : method.line + 80,
   };
+}
+
+function methodBodyBraceRange(lines: string[], startLine: number): { start: number; end: number } | undefined {
+  let depth = 0;
+  let seenOpen = false;
+  for (let lineNo = startLine; lineNo <= lines.length; lineNo++) {
+    const raw = stripStringsAndLineComment(lines[lineNo - 1] ?? '');
+    for (const char of raw) {
+      if (char === '{') {
+        depth++;
+        seenOpen = true;
+      } else if (char === '}') {
+        depth--;
+        if (seenOpen && depth <= 0) {
+          return { start: startLine, end: lineNo };
+        }
+      }
+    }
+    if (!seenOpen && raw.includes(';')) return { start: startLine, end: startLine };
+  }
+  return undefined;
+}
+
+function stripStringsAndLineComment(raw: string): string {
+  return raw
+    .replace(/"[^"]*"/g, '""')
+    .replace(/'[^']*'/g, "''")
+    .replace(/\/\/.*$/, '');
 }
 
 function callsFromLine(raw: string): Array<{ receiver?: string; name: string; argCount?: number }> {
@@ -1988,6 +2032,8 @@ function resolveCallTarget(
     if (owner) {
       const ownerMatch = uniqueMethod(index.byOwnerAndSimple.get(`${owner}.${call.name}`) ?? [], call.argCount);
       if (ownerMatch) return ownerMatch;
+      const implementationMatch = uniqueImplementationMethod(index, owner, call.name, call.argCount);
+      if (implementationMatch) return implementationMatch;
     }
     return undefined;
   }
@@ -2005,7 +2051,10 @@ function resolveCallbackTargetFromIndex(
   const splitTarget = splitReceiverTarget(callback.target);
   if (splitTarget) {
     const owner = receiverTypes ? resolveReceiverOwner(index, splitTarget.receiver, receiverTypes) : undefined;
-    if (owner) return uniqueSymbol(index.byOwnerAndSimple.get(`${owner}.${splitTarget.target}`) ?? []);
+    if (owner) {
+      return uniqueSymbol(index.byOwnerAndSimple.get(`${owner}.${splitTarget.target}`) ?? [])
+        ?? uniqueImplementationMethod(index, owner, splitTarget.target);
+    }
     return undefined;
   }
   if (callback.receiver === 'this' || !callback.receiver) {
@@ -2017,6 +2066,8 @@ function resolveCallbackTargetFromIndex(
     if (owner) {
       const ownerMatch = uniqueSymbol(index.byOwnerAndSimple.get(`${owner}.${callback.target}`) ?? []);
       if (ownerMatch) return ownerMatch;
+      const implementationMatch = uniqueImplementationMethod(index, owner, callback.target);
+      if (implementationMatch) return implementationMatch;
     }
     return undefined;
   }
@@ -2091,6 +2142,18 @@ function uniqueMethod(candidates: JavaSymbol[], argCount: number | undefined): J
     ? candidates
     : candidates.filter(candidate => (candidate.parameters?.length ?? 0) === argCount);
   return uniqueSymbol(arityMatches);
+}
+
+function uniqueImplementationMethod(
+  index: MethodIndexes,
+  interfaceName: string,
+  methodName: string,
+  argCount?: number,
+): JavaSymbol | undefined {
+  const implementors = [...new Set(index.implementorsByInterface.get(simpleTypeName(interfaceName)) ?? [])];
+  if (!implementors.length) return undefined;
+  const candidates = implementors.flatMap(owner => index.byOwnerAndSimple.get(`${owner}.${methodName}`) ?? []);
+  return uniqueMethod(candidates, argCount);
 }
 
 function buildWarnings(input: {

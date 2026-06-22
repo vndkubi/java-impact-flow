@@ -412,6 +412,90 @@ class OrderPolicy {
     expect(graph.flows[0]?.mermaid).toContain('participant OrderPolicy as OrderPolicy');
   });
 
+  it('traces full injected service and client layers through interface receivers', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ext-graph-'));
+    roots.push(root);
+    write(root, 'src/main/java/example/OrderController.java', `
+package example;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+@RestController
+@RequestMapping("/orders")
+class OrderController {
+  private final OrderService service = new OrderService();
+
+  @PostMapping("")
+  Receipt create(OrderRequest request) {
+    return service.create(request);
+  }
+}
+class OrderRequest {}
+class Receipt {}
+`);
+    write(root, 'src/main/java/example/OrderService.java', `
+package example;
+class OrderService {
+  private final InventoryService inventoryService = new InventoryService();
+  private final PaymentService paymentService = new PaymentService();
+
+  Receipt create(OrderRequest request) {
+    inventoryService.reserve(request);
+    return paymentService.pay(request);
+  }
+}
+`);
+    write(root, 'src/main/java/example/InventoryService.java', `
+package example;
+class InventoryService {
+  void reserve(OrderRequest request) {}
+}
+`);
+    write(root, 'src/main/java/example/PaymentService.java', `
+package example;
+class PaymentService {
+  private final FraudClient fraudClient = new StripeFraudClient();
+  private final BillingClient billingClient = new BillingClient();
+
+  Receipt pay(OrderRequest request) {
+    fraudClient.screen(request);
+    return billingClient.charge(request);
+  }
+}
+interface FraudClient {
+  void screen(OrderRequest request);
+}
+class StripeFraudClient implements FraudClient {
+  public void screen(OrderRequest request) {}
+}
+class BillingClient {
+  Receipt charge(OrderRequest request) {
+    return new Receipt();
+  }
+}
+`);
+
+    const graph = await buildImpactGraph({
+      root,
+      target: 'StripeFraudClient.screen',
+      mode: 'api-flow',
+      maxFiles: 50,
+      maxDepth: 12,
+    });
+
+    const targets = graph.flows[0]?.steps.map(step => step.target ?? '') ?? [];
+    expect(graph.summary.endpoints).toBe(1);
+    expect(graph.flows[0]?.endpoint?.path).toBe('/orders');
+    expect(targets.some(target => target.endsWith('OrderController.create'))).toBe(true);
+    expect(targets.some(target => target.endsWith('OrderService.create'))).toBe(true);
+    expect(targets.some(target => target.endsWith('InventoryService.reserve'))).toBe(true);
+    expect(targets.some(target => target.endsWith('PaymentService.pay'))).toBe(true);
+    expect(targets.some(target => target.endsWith('StripeFraudClient.screen'))).toBe(true);
+    expect(targets.some(target => target.endsWith('BillingClient.charge'))).toBe(true);
+    expect(graph.flows[0]?.diagnostics.unresolvedCalls).toBe(0);
+    expect(graph.flows[0]?.mermaid).toContain('participant StripeFraudClient as StripeFraudClient');
+  });
+
   it('uses class names for mermaid sequence participants instead of method names', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ext-graph-'));
     roots.push(root);

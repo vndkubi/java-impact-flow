@@ -1,5 +1,16 @@
 # Change Log
 
+## 0.1.8 - 2026-06-22
+
+- Improved API-flow traversal across injected service and client layers instead
+  of stopping at the first controller-to-service hop.
+- Resolved interface-typed injected receivers to a unique implementation method
+  when static source evidence is unambiguous.
+- Tightened method body scanning with brace-aware ranges so interface or
+  downstream declarations are not misread as calls from the previous method.
+- Added regression coverage for controller -> service -> service -> interface
+  client -> concrete client flow traces.
+
 ## 0.1.7 - 2026-06-22
 
 - Fixed the API sequence webview script syntax so sequence diagrams render
