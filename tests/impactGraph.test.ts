@@ -297,6 +297,8 @@ class Info {}
 package example;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+@RestController
 @RequestMapping("/profiles")
 class ProfileController {
   private final AuthorizationService authorizationService = new AuthorizationService();
@@ -319,7 +321,7 @@ class Profile {
 
     const graph = await buildImpactGraph({
       root,
-      target: 'ProfileController',
+      target: 'ProfileController.show',
       mode: 'api-flow',
       maxFiles: 50,
       maxDepth: 6,
@@ -328,6 +330,53 @@ class Profile {
     expect(graph.flows[0]?.diagnostics.resolvedCalls).toBeGreaterThanOrEqual(2);
     expect(graph.flows[0]?.steps.some(step => step.target?.endsWith('AuthorizationService.assertLoggedIn'))).toBe(true);
     expect(graph.flows[0]?.steps.some(step => step.target?.endsWith('Profile.name'))).toBe(true);
+  });
+
+  it('uses class names for mermaid sequence participants instead of method names', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ext-graph-'));
+    roots.push(root);
+    write(root, 'src/main/java/example/ProfileController.java', `
+package example;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+@RequestMapping("/profiles")
+class ProfileController {
+  private final AuthorizationService authorizationService = new AuthorizationService();
+
+  @GetMapping("/{profile}")
+  public String show(Profile profile) {
+    return authorizationService.assertLoggedIn() + profile.name();
+  }
+}
+class AuthorizationService {
+  String assertLoggedIn() {
+    return "ok";
+  }
+}
+class Profile {
+  String name() {
+    return "Ada";
+  }
+}
+`);
+
+    const graph = await buildImpactGraph({
+      root,
+      target: 'ProfileController',
+      mode: 'api-flow',
+      maxFiles: 50,
+      maxDepth: 6,
+    });
+
+    const mermaid = graph.flows[0]?.mermaid ?? '';
+    const participantLabels = [...mermaid.matchAll(/^participant\s+\S+\s+as\s+(.+)$/gm)].map(match => match[1] ?? '');
+    expect(participantLabels).toEqual(expect.arrayContaining([
+      'Client',
+      'ProfileController',
+      'AuthorizationService',
+      'Profile',
+    ]));
+    expect(participantLabels.some(label => /assertLoggedIn|name|show/.test(label))).toBe(false);
   });
 
   it('detects Elasticsearch BaseRestHandler routes as API endpoints', async () => {

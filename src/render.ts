@@ -1613,22 +1613,20 @@ ${webviewMessageTypesJs}
       const messages = [];
       const actorFor = step => {
         if (step.kind === 'endpoint') return { id: 'Client', label: 'Client' };
-        if (step.kind === 'handler') return actor(simpleOwner(step.label) || 'Handler');
-        if (step.kind === 'branch' || step.kind === 'loop' || step.kind === 'exception') return actor('Logic');
-        if (step.kind === 'return' || step.kind === 'throw') return actor('Result');
-        if (step.kind === 'method_reference') return actor(simpleCallbackTarget(step.label) || 'Callback');
-        if (step.kind === 'lambda') return actor('Lambda');
-        if (step.kind === 'annotation') return actor('Framework');
-        const receiver = /^([A-Za-z_$][\\w$]*)\\./.exec(step.label);
-        return actor(receiver ? receiver[1] : simpleOwner(step.target || step.label) || 'Call');
+        if (step.kind === 'handler') return actor(classFromStep(step) || 'Handler', 'handler');
+        if (step.kind === 'branch' || step.kind === 'loop' || step.kind === 'exception') return actor('Logic', 'logic');
+        if (step.kind === 'return' || step.kind === 'throw') return actor('Result', 'return');
+        if (step.kind === 'method_reference' || step.kind === 'lambda') return actor(classFromStep(step) || 'Callback', 'callback');
+        if (step.kind === 'annotation') return actor('Framework', 'framework');
+        return actor(classFromStep(step) || simpleOwner(step.target || step.label) || 'Call', 'call');
       };
       const ensure = item => {
-        if (!participants.has(item.id)) participants.set(item.id, { id: item.id, label: item.label, x: 0 });
+        if (!participants.has(item.id)) participants.set(item.id, { id: item.id, label: item.label, role: item.role || 'participant', x: 0 });
       };
       flow.steps.forEach((step, index) => {
         const current = actorFor(step);
         ensure(current);
-        const parent = nearestStack(stack, step.depth) || { id: 'Client', label: 'Client' };
+        const parent = nearestStack(stack, step.depth) || { id: 'Client', label: 'Client', role: 'client' };
         ensure(parent);
         if (index > 0) {
           messages.push({
@@ -2505,9 +2503,9 @@ ${webviewNormalizedCommandsJs}
       return el;
     }
 
-    function actor(value) {
+    function actor(value, role) {
       const label = value || 'Participant';
-      return { id: label.replace(/[^A-Za-z0-9_]/g, '_') || 'Participant', label };
+      return { id: label.replace(/[^A-Za-z0-9_]/g, '_') || 'Participant', label, role };
     }
 
     function endpointFromLabel(label) {
@@ -2522,15 +2520,27 @@ ${webviewNormalizedCommandsJs}
       return null;
     }
 
+    function classFromStep(step) {
+      if (!step) return undefined;
+      const targetClass = classFromSymbol(step.target || '');
+      if (targetClass) return targetClass;
+      if (step.kind === 'method_reference' || step.kind === 'lambda') {
+        const callbackMatch = /^([A-Za-z_$][\\w$]*)::/.exec(String(step.label || ''));
+        if (callbackMatch) return callbackMatch[1];
+      }
+      return classFromSymbol(step.label || step.target || '');
+    }
+
     function simpleOwner(value) {
       const clean = String(value || '').replace(/\\([^)]*\\)/g, '');
       const parts = clean.split('.').filter(Boolean);
       return parts.length > 1 ? parts[parts.length - 2] : parts[0];
     }
 
-    function simpleCallbackTarget(value) {
-      const match = /::([A-Za-z_$][\\w$]*)$/.exec(String(value || ''));
-      return match && match[1];
+    function classFromSymbol(value) {
+      const clean = String(value || '').replace(/\\([^)]*\\)/g, '');
+      const parts = clean.split('.').filter(Boolean);
+      return parts.length > 1 ? parts[parts.length - 2] : parts[0];
     }
 
     function shortFile(file) {

@@ -1552,14 +1552,12 @@ function buildMermaidSequence(steps: FlowStep[]): string {
 
   const participantFor = (step: FlowStep): string => {
     if (step.kind === 'endpoint') return 'Client';
-    if (step.kind === 'handler') return simpleOwner(step.label) || 'Handler';
+    if (step.kind === 'handler') return classFromStep(step) || 'Handler';
     if (step.kind === 'branch' || step.kind === 'loop' || step.kind === 'exception') return 'Logic';
     if (step.kind === 'return' || step.kind === 'throw') return 'Result';
-    if (step.kind === 'method_reference') return simpleCallbackTarget(step.label) || 'Callback';
-    if (step.kind === 'lambda') return 'Lambda';
+    if (step.kind === 'method_reference' || step.kind === 'lambda') return classFromStep(step) || 'Callback';
     if (step.kind === 'annotation') return 'Framework';
-    const receiver = step.label.match(/^([A-Za-z_$][\w$]*)\./)?.[1];
-    return receiver ?? simpleOwner(step.target ?? step.label) ?? 'Call';
+    return classFromStep(step) || simpleOwner(step.target ?? step.label) || 'Call';
   };
 
   for (const step of steps) {
@@ -1594,15 +1592,26 @@ function nearestParentActor(stack: Map<number, string>, depth: number): string |
   return undefined;
 }
 
+function classFromStep(step: FlowStep): string | undefined {
+  const targetClass = classFromSymbol(step.target ?? '');
+  if (targetClass) return targetClass;
+  if (step.kind === 'method_reference' || step.kind === 'lambda') {
+    const callbackMatch = /^([A-Za-z_$][\w$]*)::/.exec(String(step.label || ''));
+    if (callbackMatch) return callbackMatch?.[1];
+  }
+  return classFromSymbol(step.label);
+}
+
 function simpleOwner(value: string): string | undefined {
   const clean = value.replace(/\([^)]*\)/g, '');
   const parts = clean.split('.').filter(Boolean);
   return parts.length > 1 ? parts[parts.length - 2] : parts[0];
 }
 
-function simpleCallbackTarget(value: string): string | undefined {
-  const match = value.match(/::([A-Za-z_$][\w$]*)$/);
-  return match?.[1];
+function classFromSymbol(value: string): string | undefined {
+  const clean = String(value).replace(/\([^)]*\)/g, '');
+  const parts = clean.split('.').filter(Boolean);
+  return parts.length > 1 ? parts[parts.length - 2] : parts[0];
 }
 
 function sanitizeMermaidId(value: string): string {
