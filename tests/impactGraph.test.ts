@@ -379,6 +379,46 @@ class Profile {
     expect(participantLabels.some(label => /assertLoggedIn|name|show/.test(label))).toBe(false);
   });
 
+  it('uses the calling class for unresolved local call steps', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ext-graph-'));
+    roots.push(root);
+    write(root, 'src/main/java/example/LocalCallHandler.java', `
+package example;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+@RestController
+@RequestMapping("/local-calls")
+class A {
+  @GetMapping("")
+  String route() {
+    helper();
+    return "ok";
+  }
+}
+class B {
+  void helper() {}
+}
+class C {
+  void helper() {}
+}
+`);
+
+    const graph = await buildImpactGraph({
+      root,
+      target: 'A.route',
+      mode: 'api-flow',
+      maxFiles: 50,
+      maxDepth: 6,
+    });
+
+    const mermaid = graph.flows[0]?.mermaid ?? '';
+    const participantLabels = [...mermaid.matchAll(/^participant\s+\S+\s+as\s+(.+)$/gm)].map(match => match[1] ?? '');
+    expect(participantLabels).toEqual(expect.arrayContaining(['Client', 'A']));
+    expect(participantLabels).not.toContain('helper');
+    expect(graph.flows[0]?.steps.some(step => step.kind === 'call' && step.target === 'helper' && step.label === 'helper()')).toBe(true);
+  });
+
   it('detects Elasticsearch BaseRestHandler routes as API endpoints', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ext-graph-'));
     roots.push(root);

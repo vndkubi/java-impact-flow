@@ -1550,19 +1550,28 @@ function buildMermaidSequence(steps: FlowStep[]): string {
   const lines = ['sequenceDiagram'];
   const stack = new Map<number, string>();
 
-  const participantFor = (step: FlowStep): string => {
+  const participantFor = (step: FlowStep, parentLabel: string): string => {
     if (step.kind === 'endpoint') return 'Client';
     if (step.kind === 'handler') return classFromStep(step) || 'Handler';
     if (step.kind === 'branch' || step.kind === 'loop' || step.kind === 'exception') return 'Logic';
     if (step.kind === 'return' || step.kind === 'throw') return 'Result';
     if (step.kind === 'method_reference' || step.kind === 'lambda') return classFromStep(step) || 'Callback';
     if (step.kind === 'annotation') return 'Framework';
-    return classFromStep(step) || simpleOwner(step.target ?? step.label) || 'Call';
+    if (step.kind === 'call') {
+      const isLikelyUnresolvedLocalCall = isUnqualifiedMethod(step.target ?? step.label) && isLikelyCallFromThisLikeOwner(step.label);
+      return isLikelyUnresolvedLocalCall ? (parentLabel || 'Call') : (classFromStep(step) || simpleOwner(step.target ?? step.label) || parentLabel || 'Call');
+    }
+    return classFromStep(step) || simpleOwner(step.target || step.label) || 'Call';
   };
 
   for (const step of steps) {
-    const actor = sanitizeMermaidId(participantFor(step));
-    participants.set(actor, participantFor(step));
+    const parentId = nearestParentActor(stack, step.depth);
+    const parentLabel = parentId === 'Client'
+      ? 'Client'
+      : (parentId ? participants.get(parentId) : undefined) || 'Client';
+    const actorLabel = participantFor(step, parentLabel);
+    const actor = sanitizeMermaidId(actorLabel);
+    participants.set(actor, actorLabel);
     stack.set(step.depth, actor);
     if (step.kind === 'endpoint') continue;
     const parent = nearestParentActor(stack, step.depth) ?? 'Client';
@@ -1612,6 +1621,18 @@ function classFromSymbol(value: string): string | undefined {
   const clean = String(value).replace(/\([^)]*\)/g, '');
   const parts = clean.split('.').filter(Boolean);
   return parts.length > 1 ? parts[parts.length - 2] : parts[0];
+}
+
+function isUnqualifiedMethod(value: string): boolean {
+  const clean = String(value).replace(/\([^)]*\)/g, '').trim();
+  return /^[a-z_$][\w$]*$/.test(clean) && !clean.includes('.');
+}
+
+function isLikelyCallFromThisLikeOwner(label: string): boolean {
+  const clean = String(label).replace(/\([^)]*\)/g, '');
+  const parts = clean.split('.').filter(Boolean);
+  const owner = parts.length > 1 ? parts[parts.length - 2] : '';
+  return owner === '' || owner === 'this' || owner === 'super';
 }
 
 function sanitizeMermaidId(value: string): string {

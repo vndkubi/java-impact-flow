@@ -1611,22 +1611,26 @@ ${webviewMessageTypesJs}
       const participants = new Map();
       const stack = new Map();
       const messages = [];
-      const actorFor = step => {
+      const actorFor = (step, parent) => {
         if (step.kind === 'endpoint') return { id: 'Client', label: 'Client' };
         if (step.kind === 'handler') return actor(classFromStep(step) || 'Handler', 'handler');
         if (step.kind === 'branch' || step.kind === 'loop' || step.kind === 'exception') return actor('Logic', 'logic');
         if (step.kind === 'return' || step.kind === 'throw') return actor('Result', 'return');
         if (step.kind === 'method_reference' || step.kind === 'lambda') return actor(classFromStep(step) || 'Callback', 'callback');
         if (step.kind === 'annotation') return actor('Framework', 'framework');
+        if (step.kind === 'call') {
+          if (isLikelyUnresolvedLocalCall(step)) return actor(parent?.label || 'Call', 'call');
+          return actor(classFromStep(step) || simpleOwner(step.target || step.label) || parent?.label || 'Call', 'call');
+        }
         return actor(classFromStep(step) || simpleOwner(step.target || step.label) || 'Call', 'call');
       };
       const ensure = item => {
         if (!participants.has(item.id)) participants.set(item.id, { id: item.id, label: item.label, role: item.role || 'participant', x: 0 });
       };
       flow.steps.forEach((step, index) => {
-        const current = actorFor(step);
-        ensure(current);
         const parent = nearestStack(stack, step.depth) || { id: 'Client', label: 'Client', role: 'client' };
+        const current = actorFor(step, parent);
+        ensure(current);
         ensure(parent);
         if (index > 0) {
           messages.push({
@@ -2511,6 +2515,23 @@ ${webviewNormalizedCommandsJs}
     function endpointFromLabel(label) {
       const match = /^([A-Z]+)\\s+(.+)$/.exec(String(label || ''));
       return match ? { method: match[1], path: match[2] } : { method: 'API', path: label };
+    }
+
+    function isLikelyMethodName(value) {
+      const clean = String(value || '').replace(/\\([^)]*\\)/g, '').trim();
+      return /^[a-z_$][\\w$]*$/.test(clean) && !clean.includes('.');
+    }
+
+    function isLikelyCallFromThisLikeOwner(label) {
+      const clean = String(label || '').replace(/\\([^)]*\\)/g, '');
+      const parts = clean.split('.').filter(Boolean);
+      const owner = parts.length > 1 ? parts[parts.length - 2] : '';
+      return owner === '' || owner === 'this' || owner === 'super';
+    }
+
+    function isLikelyUnresolvedLocalCall(step) {
+      if (!step || step.kind !== 'call') return false;
+      return isLikelyMethodName(step.target) && isLikelyCallFromThisLikeOwner(step.label);
     }
 
     function nearestStack(stack, depth) {
