@@ -1555,11 +1555,14 @@ function buildMermaidSequence(steps: FlowStep[]): string {
     if (step.kind === 'handler') return classFromStep(step) || 'Handler';
     if (step.kind === 'branch' || step.kind === 'loop' || step.kind === 'exception') return 'Logic';
     if (step.kind === 'return' || step.kind === 'throw') return 'Result';
-    if (step.kind === 'method_reference' || step.kind === 'lambda') return classFromStep(step) || 'Callback';
+    if (step.kind === 'method_reference' || step.kind === 'lambda') {
+      if (isLikelyUnresolvedLocalStep(step)) return parentLabel || 'Callback';
+      return classFromStep(step) || simpleOwner(step.target || step.label) || parentLabel || 'Callback';
+    }
     if (step.kind === 'annotation') return 'Framework';
     if (step.kind === 'call') {
-      const isLikelyUnresolvedLocalCall = isUnqualifiedMethod(step.target ?? step.label) && isLikelyCallFromThisLikeOwner(step.label);
-      return isLikelyUnresolvedLocalCall ? (parentLabel || 'Call') : (classFromStep(step) || simpleOwner(step.target ?? step.label) || parentLabel || 'Call');
+      if (isLikelyUnresolvedLocalStep(step)) return parentLabel || 'Call';
+      return classFromStep(step) || simpleOwner(step.target ?? step.label) || parentLabel || 'Call';
     }
     return classFromStep(step) || simpleOwner(step.target || step.label) || 'Call';
   };
@@ -1626,6 +1629,11 @@ function classFromSymbol(value: string): string | undefined {
 function isUnqualifiedMethod(value: string): boolean {
   const clean = String(value).replace(/\([^)]*\)/g, '').trim();
   return /^[a-z_$][\w$]*$/.test(clean) && !clean.includes('.');
+}
+
+function isLikelyUnresolvedLocalStep(step: FlowStep): boolean {
+  if (!step || !isUnqualifiedMethod(step.target ?? '')) return false;
+  return isLikelyCallFromThisLikeOwner(step.label);
 }
 
 function isLikelyCallFromThisLikeOwner(label: string): boolean {

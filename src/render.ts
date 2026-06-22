@@ -1616,10 +1616,13 @@ ${webviewMessageTypesJs}
         if (step.kind === 'handler') return actor(classFromStep(step) || 'Handler', 'handler');
         if (step.kind === 'branch' || step.kind === 'loop' || step.kind === 'exception') return actor('Logic', 'logic');
         if (step.kind === 'return' || step.kind === 'throw') return actor('Result', 'return');
-        if (step.kind === 'method_reference' || step.kind === 'lambda') return actor(classFromStep(step) || 'Callback', 'callback');
+        if (step.kind === 'method_reference' || step.kind === 'lambda') {
+          if (isLikelyUnresolvedLocalStep(step)) return actor(parent?.label || 'Callback', 'callback');
+          return actor(classFromStep(step) || simpleOwner(step.target || step.label) || parent?.label || 'Callback', 'callback');
+        }
         if (step.kind === 'annotation') return actor('Framework', 'framework');
         if (step.kind === 'call') {
-          if (isLikelyUnresolvedLocalCall(step)) return actor(parent?.label || 'Call', 'call');
+          if (isLikelyUnresolvedLocalStep(step)) return actor(parent?.label || 'Call', 'call');
           return actor(classFromStep(step) || simpleOwner(step.target || step.label) || parent?.label || 'Call', 'call');
         }
         return actor(classFromStep(step) || simpleOwner(step.target || step.label) || 'Call', 'call');
@@ -2529,8 +2532,8 @@ ${webviewNormalizedCommandsJs}
       return owner === '' || owner === 'this' || owner === 'super';
     }
 
-    function isLikelyUnresolvedLocalCall(step) {
-      if (!step || step.kind !== 'call') return false;
+    function isLikelyUnresolvedLocalStep(step) {
+      if (!step || (step.kind !== 'call' && step.kind !== 'method_reference' && step.kind !== 'lambda')) return false;
       return isLikelyMethodName(step.target) && isLikelyCallFromThisLikeOwner(step.label);
     }
 

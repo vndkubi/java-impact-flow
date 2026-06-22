@@ -419,6 +419,52 @@ class C {
     expect(graph.flows[0]?.steps.some(step => step.kind === 'call' && step.target === 'helper' && step.label === 'helper()')).toBe(true);
   });
 
+  it('uses the calling class for unresolved local callback steps', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ext-graph-'));
+    roots.push(root);
+    write(root, 'src/main/java/example/LocalCallbackClassLayer.java', `
+package example;
+import java.util.List;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+@RestController
+@RequestMapping("/local-callbacks")
+class A {
+  @GetMapping("")
+  String route(List<String> names) {
+    names.forEach(name -> helper(name));
+    return "ok";
+  }
+}
+class B {
+  String helper(String name) {
+    return name;
+  }
+}
+class C {
+  String helper(String name) {
+    return name;
+  }
+}
+`);
+
+    const graph = await buildImpactGraph({
+      root,
+      target: 'A.route',
+      mode: 'api-flow',
+      maxFiles: 50,
+      maxDepth: 6,
+    });
+
+    const mermaid = graph.flows[0]?.mermaid ?? '';
+    const participantLabels = [...mermaid.matchAll(/^participant\s+\S+\s+as\s+(.+)$/gm)].map(match => match[1] ?? '');
+    expect(participantLabels).toEqual(expect.arrayContaining(['Client', 'A']));
+    expect(participantLabels).not.toContain('helper');
+    expect(participantLabels).not.toContain('lambda -> helper');
+    expect(graph.flows[0]?.steps.some(step => step.kind === 'lambda' && step.target === 'helper' && step.label === 'lambda -> helper')).toBe(true);
+  });
+
   it('detects Elasticsearch BaseRestHandler routes as API endpoints', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ext-graph-'));
     roots.push(root);
