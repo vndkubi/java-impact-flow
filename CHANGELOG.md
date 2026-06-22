@@ -1,5 +1,14 @@
 # Change Log
 
+## 0.1.5 - 2026-06-22
+
+- Updated API-flow sequence participants to model class-layer actors instead of
+  method-level participants.
+- Kept unresolved local calls, lambdas, and method references on the calling
+  class participant when no target class can be resolved.
+- Added regression coverage for unresolved local call and callback sequence
+  rendering.
+
 ## 0.1.4 - 2026-06-22
 
 - Published as next release with sequence UI readability upgrades for
