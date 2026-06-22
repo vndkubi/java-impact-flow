@@ -200,6 +200,22 @@ class UserListingPage {}
     expect(html).toContain('sequenceScroller.scrollTop = state.sequencePan.scrollTop - dy;');
   });
 
+  it('auto-fits the sequence diagram and gives the sequence tab focused space', () => {
+    const html = renderImpactGraphHtml(baseRenderGraphFixture());
+
+    expect(html).toContain('.workspace.sequence-focus-mode');
+    expect(html).toContain("classList.toggle('sequence-focus-mode', state.activeTab === 'sequence')");
+    expect(html).toContain('function scheduleSequenceFit()');
+    expect(html).toContain('window.requestAnimationFrame');
+    expect(html).toContain('function resetSequenceViewport()');
+    expect(html).toContain('sequenceScroller.scrollLeft = 0;');
+    expect(html).toContain("if (state.activeTab === 'sequence') scheduleSequenceFit();");
+    expect(html).toContain('fitSequence({ resetScroll: true })');
+    expect(html).toContain('function isTestFile(file)');
+    expect(html).toContain('function normalizeTestFilePath(file)');
+    expect(html).toContain('function testClassNameFromFile(file)');
+  });
+
   it('emits syntactically valid webview scripts', () => {
     const html = renderImpactGraphHtml(baseRenderGraphFixture());
     const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((match) => match[1]);

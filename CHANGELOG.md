@@ -1,5 +1,14 @@
 # Change Log
 
+## 0.1.10 - 2026-06-22
+
+- Expanded the Sequence tab into a focused layout by hiding the right inspector
+  while the sequence diagram is active.
+- Auto-fits sequence diagrams after render and resize so the initial view is
+  visible without manual zoom in/out.
+- Added regression coverage for the focused sequence layout and missing runtime
+  helpers used by suggested-test rendering.
+
 ## 0.1.9 - 2026-06-22
 
 - Fixed API-flow and Static Debug behavior when the selected target is a

@@ -2,7 +2,7 @@
   "name": "java-impact-flow",
   "displayName": "Java Impact Flow",
   "description": "Visualize Java field, method, callback, API-flow impact, and suggested tests in VS Code.",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "publisher": "vndkubi",
   "type": "module",
   "main": "./dist/extension.js",

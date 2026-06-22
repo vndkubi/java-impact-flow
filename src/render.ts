@@ -141,6 +141,15 @@ export function renderImpactGraphHtml(graph: ImpactGraph, options: RenderImpactG
     .workspace.graph-mode .main-panel {
       grid-column: 1;
     }
+    .workspace.sequence-focus-mode {
+      grid-template-columns: 330px minmax(0, 1fr);
+    }
+    .workspace.sequence-focus-mode .inspector {
+      display: none;
+    }
+    .workspace.sequence-focus-mode .main-panel {
+      grid-column: 2;
+    }
     .nav-panel, .inspector {
       min-height: 0;
       overflow: auto;
@@ -553,8 +562,8 @@ export function renderImpactGraphHtml(graph: ImpactGraph, options: RenderImpactG
       background: var(--panel);
     }
     .sequence-refs-dock {
-      height: 286px;
-      min-height: 220px;
+      height: 196px;
+      min-height: 160px;
       display: flex;
       flex-direction: column;
       border-top: 1px solid var(--border);
@@ -824,6 +833,7 @@ export function renderImpactGraphHtml(graph: ImpactGraph, options: RenderImpactG
     .empty { padding: 16px; color: var(--muted); font-size: 13px; line-height: 1.45; }
     @media (max-width: 1240px) {
       .workspace { grid-template-columns: 270px minmax(0, 1fr); overflow: auto; }
+      .workspace.sequence-focus-mode { grid-template-columns: 270px minmax(0, 1fr); overflow: hidden; }
       .inspector { grid-column: 1 / -1; min-height: 260px; max-height: 360px; border-left: 0; border-top: 1px solid var(--border); display: grid; grid-template-columns: minmax(280px, 380px) minmax(0, 1fr); }
       .inspector .panel-section { border-bottom: 0; border-right: 1px solid var(--border); }
       .inspector .panel-section:last-child { border-right: 0; }
@@ -1044,6 +1054,9 @@ ${webviewMessageTypesJs}
     const graphSvg = document.getElementById('graphSvg');
     const sequenceSvg = document.getElementById('sequenceSvg');
     const sequenceScroller = document.getElementById('sequenceScroller');
+    const MIN_SEQUENCE_ZOOM = 0.38;
+    const MAX_SEQUENCE_FIT_ZOOM = 1.08;
+    let sequenceFitFrame = 0;
 
     document.getElementById('targetTitle').textContent = graph.metadata.target + ' impact view';
     document.getElementById('targetMeta').textContent = graph.metadata.root + ' | ' + graph.metadata.mode + ' | ' + graph.metadata.generatedAt;
@@ -1065,7 +1078,7 @@ ${webviewMessageTypesJs}
       document.querySelectorAll('.tab').forEach(button => {
         button.onclick = () => setActiveTab(button.dataset.tab || 'sequence');
       });
-      document.getElementById('fitSequence').onclick = fitSequence;
+      document.getElementById('fitSequence').onclick = () => fitSequence({ resetScroll: true });
       document.getElementById('zoomOut').onclick = () => setSequenceZoom(state.sequenceZoom - .12);
       document.getElementById('zoomIn').onclick = () => setSequenceZoom(state.sequenceZoom + .12);
       document.getElementById('toggleLabels').onclick = () => {
@@ -1101,6 +1114,7 @@ ${webviewMessageTypesJs}
         await copyText(staticDebugTraceMarkdown(activeStaticDebugSession()));
       };
       window.addEventListener('resize', () => {
+        if (state.activeTab === 'sequence') scheduleSequenceFit();
         if (state.activeTab === 'graph') drawGraph();
       });
       renderGraphControls();
@@ -1118,7 +1132,9 @@ ${webviewMessageTypesJs}
     }
 
     function applyActiveTabLayout() {
-      document.getElementById('workspace').classList.toggle('graph-mode', state.activeTab === 'graph');
+      const workspace = document.getElementById('workspace');
+      workspace.classList.toggle('graph-mode', state.activeTab === 'graph');
+      workspace.classList.toggle('sequence-focus-mode', state.activeTab === 'sequence');
     }
 
     function renderGraphControls() {
@@ -1301,6 +1317,7 @@ ${webviewMessageTypesJs}
         renderFlowDiagnostics(undefined);
         renderSequenceLegend([]);
         drawEmptySequence();
+        scheduleSequenceFit();
         return;
       }
       const endpoint = flow.endpoint || endpointFromLabel(flow.label);
@@ -1324,6 +1341,7 @@ ${webviewMessageTypesJs}
       drawSequence(flow, model);
       renderFlowDiagnostics(flow);
       renderFlowSteps(flow);
+      scheduleSequenceFit();
     }
 
     function renderSequenceHint(flow, model) {
@@ -2532,15 +2550,35 @@ ${webviewNormalizedCommandsJs}
       renderSelected();
     }
 
-    function setSequenceZoom(value) {
-      state.sequenceZoom = Math.max(.55, Math.min(1.8, value));
+    function setSequenceZoom(value, options = {}) {
+      state.sequenceZoom = Math.max(MIN_SEQUENCE_ZOOM, Math.min(1.8, value));
       drawSequence(activeFlow());
+      if (options.resetScroll) resetSequenceViewport();
     }
 
-    function fitSequence() {
+    function fitSequence(options = {}) {
       const baseWidth = Number(sequenceSvg.dataset.baseWidth || 980);
-      const available = Math.max(320, sequenceScroller.clientWidth - 28);
-      setSequenceZoom(Math.max(.62, Math.min(1.15, available / baseWidth)));
+      const baseHeight = Number(sequenceSvg.dataset.baseHeight || 540);
+      const availableWidth = Math.max(320, sequenceScroller.clientWidth - 28);
+      const availableHeight = Math.max(260, sequenceScroller.clientHeight - 28);
+      const widthZoom = availableWidth / baseWidth;
+      const heightZoom = availableHeight / baseHeight;
+      setSequenceZoom(Math.max(MIN_SEQUENCE_ZOOM, Math.min(MAX_SEQUENCE_FIT_ZOOM, widthZoom, heightZoom)), options);
+    }
+
+    function scheduleSequenceFit() {
+      if (sequenceFitFrame && typeof window.cancelAnimationFrame === 'function') {
+        window.cancelAnimationFrame(sequenceFitFrame);
+      }
+      sequenceFitFrame = window.requestAnimationFrame(() => {
+        sequenceFitFrame = 0;
+        if (state.activeTab === 'sequence') fitSequence({ resetScroll: true });
+      });
+    }
+
+    function resetSequenceViewport() {
+      sequenceScroller.scrollLeft = 0;
+      sequenceScroller.scrollTop = 0;
     }
 
     function activeFlow() {
@@ -2652,6 +2690,30 @@ ${webviewNormalizedCommandsJs}
       if (normalized.includes('/entities/')) return 'entity';
       if (isTestFile(file)) return 'test';
       return 'file';
+    }
+
+    function isTestFile(file) {
+      const normalized = String(file || '').replace(/\\\\/g, '/');
+      return /(^|\\/)(src\\/test|test|tests|it|integrationTest)(\\/|$)/i.test(normalized) || /(?:Test|Tests|IT)\\.java$/i.test(normalized);
+    }
+
+    function normalizeTestFilePath(file) {
+      return String(file || '').replace(/\\\\/g, '/');
+    }
+
+    function testClassNameFromFile(file) {
+      const normalized = normalizeTestFilePath(file);
+      const javaMarker = 'src/test/java/';
+      const javaIndex = normalized.indexOf(javaMarker);
+      if (javaIndex >= 0) {
+        return normalized.slice(javaIndex + javaMarker.length).replace(/\\.java$/, '').split('/').join('.');
+      }
+      const testIndex = normalized.indexOf('/test/');
+      if (testIndex >= 0) {
+        return normalized.slice(testIndex + '/test/'.length).replace(/\\.java$/, '').split('/').join('.');
+      }
+      const parts = normalized.replace(/\\.java$/, '').split('/').filter(Boolean);
+      return parts.length ? parts[parts.length - 1] : normalized;
     }
 
     function trimLabel(value, max) {
