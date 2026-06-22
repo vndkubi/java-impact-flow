@@ -488,6 +488,42 @@ export function renderImpactGraphHtml(graph: ImpactGraph, options: RenderImpactG
     .message:hover text.label { fill: var(--target); }
     .message.selected .message-line, .message.selected path { stroke: var(--selected); stroke-width: 2.8; }
     .message.selected text.label { fill: var(--selected); font-weight: 760; }
+    .sequence-legend {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+      min-height: 42px;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border);
+      border-top: 1px solid var(--border);
+      background: color-mix(in srgb, var(--panel) 92%, #000 8%);
+    }
+    .sequence-legend-title {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 760;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+    }
+    .sequence-legend-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 3px 8px;
+      background: var(--panel-2);
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.2;
+    }
+    .sequence-legend-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      display: inline-flex;
+    }
     .mermaid-box {
       border-top: 1px solid var(--border);
       background: var(--panel);
@@ -638,13 +674,23 @@ export function renderImpactGraphHtml(graph: ImpactGraph, options: RenderImpactG
     .kind-tag {
       flex: none;
       min-width: 92px;
-      color: var(--callback);
       font-size: 10px;
       font-weight: 760;
       letter-spacing: .05em;
       text-transform: uppercase;
     }
     .item-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 690; }
+    .item-meta {
+      margin-top: 5px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+      flex-wrap: wrap;
+    }
     .open-hint {
       margin-left: auto;
       flex: none;
@@ -844,6 +890,7 @@ export function renderImpactGraphHtml(graph: ImpactGraph, options: RenderImpactG
             </div>
           </div>
           <div class="sequence-stage">
+            <div id="sequenceLegend" class="sequence-legend" role="note" aria-label="Sequence legend"></div>
             <div id="sequenceScroller" class="sequence-scroller">
               <svg id="sequenceSvg" class="sequence-svg" role="img" aria-label="API sequence flow"></svg>
             </div>
@@ -1216,29 +1263,43 @@ ${webviewMessageTypesJs}
         document.getElementById('mermaidText').textContent = '';
         document.getElementById('flowSteps').innerHTML = '<div class="empty">No flow selected.</div>';
         renderFlowDiagnostics(undefined);
+        renderSequenceLegend([]);
         drawEmptySequence();
         return;
       }
       const endpoint = flow.endpoint || endpointFromLabel(flow.label);
       document.getElementById('flowTitle').textContent = flow.label;
-      document.getElementById('flowMeta').textContent = flow.steps.length + ' steps | max depth ' + flow.maxDepth + (flow.truncated ? ' | truncated' : '');
+      const model = sequenceModel(flow);
+      const kindCounts = summarizeSequenceKinds(flow.steps);
+      const unresolvedCount = flow.diagnostics?.unresolvedCalls || 0;
+      const detail = [
+        flow.steps.length + ' steps',
+        'max depth ' + flow.maxDepth,
+        (kindCounts['call'] ? kindCounts['call'] + ' calls' : ''),
+        (kindCounts['return'] ? kindCounts['return'] + ' returns' : ''),
+        unresolvedCount ? unresolvedCount + ' unresolved' : '',
+      ].filter(Boolean).join(' | ');
+      document.getElementById('flowMeta').textContent = detail + (flow.truncated ? ' | truncated' : '');
       document.getElementById('flowCrumbTitle').textContent = (endpoint.method || 'API') + ' ' + (endpoint.path || flow.label);
       document.getElementById('flowCrumbMeta').textContent = flow.endpoint?.handler || flow.label;
       document.getElementById('mermaidText').textContent = flow.mermaid || '';
-      drawSequence(flow);
+      renderSequenceLegend(model.messages);
+      drawSequence(flow, model);
       renderFlowDiagnostics(flow);
       renderFlowSteps(flow);
     }
 
-    function drawSequence(flow) {
+    function drawSequence(flow, model = sequenceModel(flow)) {
       if (!flow) return;
-      const model = sequenceModel(flow);
-      const laneWidth = 220;
-      const left = 96;
-      const top = 34;
-      const rowHeight = 66;
+      const left = 98;
+      const lanePadding = 42;
+      const laneWidth = Math.max(190, Math.min(280, Math.ceil(Math.max(...model.participants.map(item => String(item.label).length), 14) * 11));
+      const headerHeight = 94;
+      const messageTop = headerHeight + 28;
+      const rowHeight = 76;
+      const top = 22;
       const width = Math.max(980, left * 2 + model.participants.length * laneWidth);
-      const height = Math.max(520, top + 94 + model.messages.length * rowHeight);
+      const height = Math.max(540, top + messageTop + model.messages.length * rowHeight);
       sequenceSvg.dataset.baseWidth = String(width);
       sequenceSvg.dataset.baseHeight = String(height);
       sequenceSvg.setAttribute('viewBox', '0 0 ' + width + ' ' + height);
@@ -1250,54 +1311,123 @@ ${webviewMessageTypesJs}
       sequenceSvg.innerHTML = '';
 
       const defs = svgEl('defs');
-      defs.innerHTML = '<marker id="seqArrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#9aa6b8"></path></marker>';
+      defs.innerHTML = [
+        markerDef('seqArrow', '#9aa6b8'),
+        markerDef('seqArrowLogic', '#f59e0b'),
+        markerDef('seqArrowReturn', '#34d399'),
+        markerDef('seqArrowThrow', '#f87171'),
+      ].join('');
       sequenceSvg.appendChild(defs);
-      const headerBg = svgEl('rect', { x: 0, y: 0, width, height: 76, fill: 'rgba(27, 33, 48, .94)' });
+      const headerBg = svgEl('rect', { x: 0, y: 0, width, height: 94, fill: 'rgba(27, 33, 48, .94)' });
       sequenceSvg.appendChild(headerBg);
 
       model.participants.forEach((participant, index) => {
         const x = left + index * laneWidth + laneWidth / 2;
+        const participantWidth = laneWidth - lanePadding;
         participant.x = x;
-        const box = svgEl('rect', { x: x - 78, y: top, width: 156, height: 34, rx: 7, fill: '#151923', stroke: '#2a3343' });
+        const box = svgEl('rect', { x: x - participantWidth / 2, y: top, width: participantWidth, height: 44, rx: 7, fill: '#151923', stroke: '#2a3343' });
         const text = svgEl('text', { x, y: top + 22, 'text-anchor': 'middle', 'font-size': 12, 'font-weight': 760, fill: '#e7edf6' });
         text.textContent = trimLabel(participant.label, 22);
-        const line = svgEl('line', { x1: x, y1: top + 38, x2: x, y2: height - 24, stroke: '#334155', 'stroke-dasharray': '5 6' });
+        const role = svgEl('text', { x, y: top + 38, 'text-anchor': 'middle', 'font-size': 10, fill: '#9aa6b8' });
+        role.textContent = trimLabel(participant.role || 'participant', 16);
+        const line = svgEl('line', { x1: x, y1: top + 48, x2: x, y2: height - 24, stroke: '#334155', 'stroke-dasharray': '5 6' });
         sequenceSvg.appendChild(box);
         sequenceSvg.appendChild(text);
+        sequenceSvg.appendChild(role);
         sequenceSvg.appendChild(line);
       });
 
+      const stepById = new Map(flow.steps.map(step => [step.id, step]));
       model.messages.forEach((message, index) => {
-        const y = top + 88 + index * rowHeight;
+        const y = top + messageTop + index * rowHeight;
         const from = model.participants.find(item => item.id === message.from);
         const to = model.participants.find(item => item.id === message.to);
         if (!from || !to) return;
-        const band = svgEl('rect', { x: 0, y: y - 29, width, height: rowHeight, fill: index % 2 === 0 ? 'rgba(255,255,255,.018)' : 'rgba(255,255,255,.04)' });
+        const band = svgEl('rect', { x: 0, y: y - 34, width, height: rowHeight, fill: index % 2 === 0 ? 'rgba(255,255,255,.018)' : 'rgba(255,255,255,.04)' });
+        const markerId = message.kind === 'return'
+          ? 'seqArrowReturn'
+          : message.kind === 'throw'
+            ? 'seqArrowThrow'
+            : message.kind === 'branch' || message.kind === 'loop' || message.kind === 'exception'
+              ? 'seqArrowLogic'
+              : 'seqArrow';
+        const lineStyle = message.kind === 'branch' || message.kind === 'loop' || message.kind === 'exception' ? '4 6' : '';
         sequenceSvg.appendChild(band);
-        const group = svgEl('g', { class: 'message' + (state.selectedId === message.stepId ? ' selected' : ''), 'data-step-id': message.stepId });
+        const group = svgEl('g', {
+          class: 'message message-' + message.kind + (state.selectedId === message.stepId ? ' selected' : ''),
+          'data-step-id': message.stepId,
+        });
         const same = from.id === to.id;
         const x1 = from.x;
         const x2 = same ? from.x + 72 : to.x;
         const color = sequenceColor(message.kind);
+        const arrowX = same ? x1 + 72 : (x1 + x2) / 2;
         if (same) {
-          const path = svgEl('path', { class: 'message-line', d: 'M ' + x1 + ' ' + y + ' C ' + (x1 + 112) + ' ' + y + ', ' + (x1 + 112) + ' ' + (y + 31) + ', ' + x1 + ' ' + (y + 31), fill: 'none', stroke: color, 'stroke-width': 1.7, 'marker-end': 'url(#seqArrow)' });
+          const path = svgEl('path', {
+            class: 'message-line',
+            d: 'M ' + x1 + ' ' + y + ' C ' + (x1 + 112) + ' ' + y + ', ' + (x1 + 112) + ' ' + (y + 31) + ', ' + x1 + ' ' + (y + 31),
+            fill: 'none',
+            stroke: color,
+            'stroke-width': 1.7,
+            'stroke-dasharray': lineStyle,
+            'marker-end': 'url(#' + markerId + ')',
+          });
           group.appendChild(path);
         } else {
-          const line = svgEl('line', { class: 'message-line', x1, y1: y, x2, y2: y, stroke: color, 'stroke-width': 1.7, 'marker-end': 'url(#seqArrow)' });
+          const line = svgEl('line', {
+            class: 'message-line',
+            x1,
+            y1: y,
+            x2,
+            y2: y,
+            stroke: color,
+            'stroke-width': 1.7,
+            'stroke-dasharray': lineStyle,
+            'marker-end': 'url(#' + markerId + ')',
+          });
           group.appendChild(line);
         }
         const badge = svgEl('circle', { cx: Math.min(x1, x2) + 16, cy: y - 17, r: 11, fill: '#111722', stroke: color });
         const badgeText = svgEl('text', { x: Math.min(x1, x2) + 16, y: y - 13, 'text-anchor': 'middle', 'font-size': 9, 'font-weight': 760, fill: '#e7edf6' });
         badgeText.textContent = String(index + 1);
+        const kind = svgEl('text', {
+          x: Math.min(x1, x2) + 16,
+          y: y - 28,
+          'text-anchor': 'middle',
+          'font-size': 8,
+          fill: '#9aa6b8',
+        });
+        kind.textContent = sequenceKindLabel(message.kind);
+        const endpointMeta = message.kind === 'return' ? 'return' : message.kind;
         group.appendChild(badge);
         group.appendChild(badgeText);
+        group.appendChild(kind);
         if (state.showLabels) {
-          const label = svgEl('text', { class: 'label', x: same ? x1 + 92 : (x1 + x2) / 2, y: y - 10, 'text-anchor': same ? 'start' : 'middle', 'font-size': 12, 'font-weight': 650, fill: '#e7edf6' });
+          const labelX = same ? x1 + 92 : (x1 + x2) / 2;
+          const label = svgEl('text', { class: 'label', x: labelX, y: y - 10, 'text-anchor': same ? 'start' : 'middle', 'font-size': 12, 'font-weight': 650, fill: '#e7edf6' });
           label.textContent = trimLabel(message.label, same ? 34 : 48);
-          const loc = svgEl('text', { x: same ? x1 + 92 : (x1 + x2) / 2, y: y + 18, 'text-anchor': same ? 'start' : 'middle', 'font-size': 10, fill: '#9aa6b8' });
-          loc.textContent = message.fileLine;
+          const loc = svgEl('text', { x: labelX, y: y + 18, 'text-anchor': same ? 'start' : 'middle', 'font-size': 10, fill: '#9aa6b8' });
+          const flowDirection = sequenceDirectionLabel(message.kind, from.label, to.label);
+          const endpointHint = endpointMeta === 'return' ? ' - ' + endpointMeta : '';
+          loc.textContent = message.fileLine + ' | ' + flowDirection + endpointHint;
           group.appendChild(label);
           group.appendChild(loc);
+        }
+        if (state.showLabels && message.fileLine) {
+          const source = stepById.get(message.stepId);
+          const confidenceLine = svgEl('text', {
+            x: arrowX,
+            y: y + 34,
+            'text-anchor': same ? 'start' : 'middle',
+            'font-size': 9,
+            fill: '#6d7787',
+          });
+          confidenceLine.textContent = source?.confidence !== undefined
+            ? 'confidence ' + Math.round(source.confidence * 100) + '%'
+            : '';
+          if (confidenceLine.textContent) {
+            group.appendChild(confidenceLine);
+          }
         }
         group.onclick = () => selectFlowStep(flow.steps.find(step => step.id === message.stepId));
         sequenceSvg.appendChild(group);
@@ -1333,8 +1463,10 @@ ${webviewMessageTypesJs}
       document.getElementById('stepCount').textContent = steps.length + ' steps';
       document.getElementById('flowSteps').innerHTML = steps.map((step, index) =>
         '<button class="step-item ' + (state.selectedId === step.id ? 'selected' : '') + '" style="--depth:' + Math.min(step.depth, 5) + '" data-step="' + step.id + '">' +
-          '<div class="item-top"><span class="step-num">' + (index + 1) + '</span><span class="kind-tag">' + escapeHtml(step.kind) + '</span></div>' +
+          '<div class="item-top"><span class="step-num">' + (index + 1) + '</span><span class="kind-tag" style="color: ' + escapeHtml(sequenceColor(step.kind)) + '">' + escapeHtml(step.kind) + '</span></div>' +
           '<div class="item-title">' + escapeHtml(step.label) + '</div>' +
+          '<div class="item-meta"><span>depth ' + step.depth + '</span><span>confidence ' + Math.round(step.confidence * 100) + '%</span>' +
+          (step.target ? '<span>target ' + escapeHtml(step.target) + '</span>' : '') + '</div>' +
           '<div class="item-loc">' + escapeHtml(shortFile(step.file)) + ':' + step.line + '</div>' +
         '</button>'
       ).join('');
@@ -1470,6 +1602,63 @@ ${webviewMessageTypesJs}
       if (kind === 'exception' || kind === 'throw') return '#f87171';
       if (kind === 'return') return '#34d399';
       return '#9aa6b8';
+    }
+
+    function summarizeSequenceKinds(steps) {
+      return steps.reduce((acc, step) => {
+        acc[step.kind] = (acc[step.kind] || 0) + 1;
+        return acc;
+      }, {});
+    }
+
+    function sequenceKindLabel(kind) {
+      if (kind === 'method_reference') return 'callback';
+      if (kind === 'endpoint') return 'endpoint';
+      if (kind === 'handler') return 'handler';
+      if (kind === 'lambda') return 'lambda';
+      if (kind === 'annotation') return 'annotation';
+      if (kind === 'branch') return 'branch';
+      if (kind === 'loop') return 'loop';
+      if (kind === 'exception') return 'exception';
+      if (kind === 'return') return 'return';
+      if (kind === 'throw') return 'throw';
+      return kind;
+    }
+
+    function sequenceDirectionLabel(kind, fromLabel, toLabel) {
+      const from = String(fromLabel || '');
+      const to = String(toLabel || '');
+      if (kind === 'return' || kind === 'throw') {
+        return 'response ' + (from ? 'from ' + from : '') + (to ? (from ? ' to ' + to : 'to ' + to) : '');
+      }
+      if (kind === 'branch' || kind === 'loop' || kind === 'exception') {
+        return kind;
+      }
+      if (!from || !to || from === to) return from || to || kind;
+      return from + ' -> ' + to;
+    }
+
+    function markerDef(id, color) {
+      return '<marker id="' + id + '" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="' + color + '"></path></marker>';
+    }
+
+    function renderSequenceLegend(messages) {
+      const legend = document.getElementById('sequenceLegend');
+      if (!legend) return;
+      if (!messages || !messages.length) {
+        legend.innerHTML = '<span class="sequence-legend-title">No sequence steps</span>';
+        return;
+      }
+      const counts = summarizeSequenceKinds(messages);
+      const entries = Object.entries(counts).sort((left, right) => {
+        if (left[1] === right[1]) return String(left[0]).localeCompare(String(right[0]));
+        return right[1] - left[1];
+      });
+      legend.innerHTML =
+        '<span class="sequence-legend-title">Flow legend</span>' +
+        entries.map(([kind, count]) =>
+          '<span class="sequence-legend-item"><span class="sequence-legend-dot" style="background:' + escapeHtml(sequenceColor(kind)) + '"></span>' + escapeHtml(sequenceKindLabel(kind)) + ' (' + Number(count) + ')</span>'
+        ).join('');
     }
 
     function renderReferences() {
