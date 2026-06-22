@@ -476,7 +476,11 @@ export function renderImpactGraphHtml(graph: ImpactGraph, options: RenderImpactG
       padding: 14px;
       background-image: radial-gradient(circle at 1px 1px, rgba(148, 163, 184, .16) 1px, transparent 0);
       background-size: 24px 24px;
+      cursor: grab;
+      overscroll-behavior: contain;
+      touch-action: none;
     }
+    .sequence-scroller.dragging { cursor: grabbing; user-select: none; }
     .sequence-svg {
       display: block;
       border: 1px solid var(--border);
@@ -1024,6 +1028,16 @@ ${webviewMessageTypesJs}
       selectedFilter: null,
       sequenceZoom: 1,
       showLabels: true,
+      sequencePan: {
+        active: false,
+        moved: false,
+        pointerId: null,
+        startX: 0,
+        startY: 0,
+        scrollLeft: 0,
+        scrollTop: 0,
+        suppressClick: false
+      },
       graphScope: 'map',
       graphLabels: !denseGraph
     };
@@ -1063,6 +1077,7 @@ ${webviewMessageTypesJs}
         const text = document.getElementById('mermaidText').textContent || '';
         try { await navigator.clipboard.writeText(text); } catch {}
       };
+      bindSequencePan();
       document.getElementById('refSearch').oninput = renderReferences;
       document.getElementById('quickRefSearch').oninput = renderQuickReferences;
       document.querySelectorAll('[data-graph-scope]').forEach(button => {
@@ -1332,7 +1347,7 @@ ${webviewMessageTypesJs}
       if (!flow) return;
       const left = 98;
       const lanePadding = 42;
-      const laneWidth = Math.max(190, Math.min(280, Math.ceil(Math.max(...model.participants.map(item => String(item.label).length), 14) * 11));
+      const laneWidth = Math.max(190, Math.min(280, Math.ceil(Math.max(...model.participants.map(item => String(item.label).length), 14) * 11)));
       const headerHeight = 94;
       const messageTop = headerHeight + 28;
       const rowHeight = 76;
@@ -1480,7 +1495,10 @@ ${webviewMessageTypesJs}
           route,
         ].concat(lineDetails).join('\\n');
         group.appendChild(title);
-        group.onclick = () => selectFlowStep(flow.steps.find(step => step.id === message.stepId));
+        group.onclick = () => {
+          if (state.sequencePan.suppressClick) return;
+          selectFlowStep(flow.steps.find(step => step.id === message.stepId));
+        };
         sequenceSvg.appendChild(group);
       });
     }
@@ -2381,6 +2399,60 @@ ${webviewNormalizedCommandsJs}
       state.selectedId = edge.id;
       renderSelected();
       drawGraph();
+    }
+
+    function bindSequencePan() {
+      sequenceScroller.addEventListener('pointerdown', startSequencePan);
+      sequenceScroller.addEventListener('pointermove', moveSequencePan);
+      sequenceScroller.addEventListener('pointerup', endSequencePan);
+      sequenceScroller.addEventListener('pointercancel', endSequencePan);
+      sequenceScroller.addEventListener('pointerleave', endSequencePan);
+    }
+
+    function startSequencePan(event) {
+      if (event.button !== undefined && event.button !== 0) return;
+      if (event.target && event.target.closest && event.target.closest('button, input, textarea, select, a, summary')) return;
+      state.sequencePan.active = true;
+      state.sequencePan.moved = false;
+      state.sequencePan.pointerId = event.pointerId;
+      state.sequencePan.startX = event.clientX;
+      state.sequencePan.startY = event.clientY;
+      state.sequencePan.scrollLeft = sequenceScroller.scrollLeft;
+      state.sequencePan.scrollTop = sequenceScroller.scrollTop;
+      sequenceScroller.classList.add('dragging');
+      if (sequenceScroller.setPointerCapture && event.pointerId !== undefined) {
+        sequenceScroller.setPointerCapture(event.pointerId);
+      }
+    }
+
+    function moveSequencePan(event) {
+      if (!state.sequencePan.active || state.sequencePan.pointerId !== event.pointerId) return;
+      const dx = event.clientX - state.sequencePan.startX;
+      const dy = event.clientY - state.sequencePan.startY;
+      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+        state.sequencePan.moved = true;
+        state.sequencePan.suppressClick = true;
+        event.preventDefault();
+      }
+      sequenceScroller.scrollLeft = state.sequencePan.scrollLeft - dx;
+      sequenceScroller.scrollTop = state.sequencePan.scrollTop - dy;
+    }
+
+    function endSequencePan(event) {
+      if (!state.sequencePan.active || (event.pointerId !== undefined && state.sequencePan.pointerId !== event.pointerId)) return;
+      const moved = state.sequencePan.moved;
+      state.sequencePan.active = false;
+      state.sequencePan.moved = false;
+      state.sequencePan.pointerId = null;
+      sequenceScroller.classList.remove('dragging');
+      if (sequenceScroller.releasePointerCapture && event.pointerId !== undefined) {
+        try { sequenceScroller.releasePointerCapture(event.pointerId); } catch {}
+      }
+      if (moved) {
+        setTimeout(() => { state.sequencePan.suppressClick = false; }, 0);
+      } else {
+        state.sequencePan.suppressClick = false;
+      }
     }
 
     function openLocation(file, line) {

@@ -1,5 +1,14 @@
 # Change Log
 
+## 0.1.7 - 2026-06-22
+
+- Fixed the API sequence webview script syntax so sequence diagrams render
+  reliably instead of failing before initialization.
+- Added pointer drag/pan support to the sequence diagram canvas while preserving
+  click-to-select behavior for real flow messages.
+- Added regression coverage for generated webview script syntax and sequence
+  drag/pan wiring.
+
 ## 0.1.6 - 2026-06-22
 
 - Fixed API-flow generation for targets in middle service/policy layers by

@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import vm from 'node:vm';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildImpactGraph } from '../src/impactGraph.js';
 import type { ImpactGraph } from '../src/impactGraph.js';
@@ -186,6 +187,27 @@ class UserListingPage {}
     expect(html).toContain('if (typeof message.file !== \'string\' || !message.file.trim().length) return false;');
     expect(html).toContain('const rawLine = Number(message.line);');
     expect(html).toContain('if (type === WEBVIEW_MESSAGE_TYPES.publishDiagnostics)');
+  });
+
+  it('renders pointer drag pan support for the sequence diagram', () => {
+    const html = renderImpactGraphHtml(baseRenderGraphFixture());
+
+    expect(html).toContain('.sequence-scroller.dragging');
+    expect(html).toContain('function bindSequencePan()');
+    expect(html).toContain('sequenceScroller.addEventListener(\'pointerdown\', startSequencePan);');
+    expect(html).toContain('sequenceScroller.addEventListener(\'pointermove\', moveSequencePan);');
+    expect(html).toContain('sequenceScroller.scrollLeft = state.sequencePan.scrollLeft - dx;');
+    expect(html).toContain('sequenceScroller.scrollTop = state.sequencePan.scrollTop - dy;');
+  });
+
+  it('emits syntactically valid webview scripts', () => {
+    const html = renderImpactGraphHtml(baseRenderGraphFixture());
+    const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((match) => match[1]);
+
+    expect(scripts.length).toBeGreaterThan(0);
+    for (const script of scripts) {
+      expect(() => new vm.Script(script)).not.toThrow();
+    }
   });
 
   it('shows current manifest version in product header', () => {
