@@ -1,5 +1,18 @@
 # Change Log
 
+## 0.1.12 - 2026-06-27
+
+- Added a Command Palette (`Ctrl`/`Cmd`+`P`, also `Ctrl`/`Cmd`+`K` or `/`) with
+  fuzzy search to jump to any flow, file, suggested test, reference, or graph
+  node.
+- Added a graph minimap (shown for graphs with 12+ nodes) with a live viewport
+  box and click-to-recenter.
+- Switched raw-graph edges from straight lines to curved Bezier paths to reduce
+  visual overlap.
+- Froze the participant header row at the top of the sequence diagram while
+  scrolling vertically; it still pans horizontally so lifelines stay aligned,
+  and hides when scrolled back to the top.
+
 ## 0.1.11 - 2026-06-27
 
 - Reworked the sequence diagram into a proper UML view: combined fragments

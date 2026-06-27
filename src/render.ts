@@ -340,7 +340,19 @@ export function renderImpactGraphHtml(graph: ImpactGraph, options: RenderImpactG
     .action-btn:hover, .icon-btn:hover { border-color: var(--border-strong); }
     .action-btn.active { border-color: var(--target); color: var(--target); }
     .zoom-readout { min-width: 46px; color: var(--muted); font-size: 12px; text-align: center; }
-    .sequence-stage { min-height: 0; flex: 1; display: flex; flex-direction: column; overflow: hidden; background: color-mix(in srgb, var(--bg) 90%, #000 10%); }
+    .sequence-stage { position: relative; min-height: 0; flex: 1; display: flex; flex-direction: column; overflow: hidden; background: color-mix(in srgb, var(--bg) 90%, #000 10%); }
+    .sequence-header-overlay {
+      position: absolute;
+      overflow: hidden;
+      pointer-events: none;
+      z-index: 6;
+      border-bottom: 1px solid var(--border);
+      box-shadow: 0 6px 14px rgba(0, 0, 0, .22);
+      background: color-mix(in srgb, var(--panel-3) 94%, var(--bg) 6%);
+      display: none;
+    }
+    .sequence-header-overlay.visible { display: block; }
+    .sequence-header-overlay svg { display: block; transform-origin: left top; }
     .debugger-stage {
       min-height: 0;
       flex: 1;
@@ -796,7 +808,7 @@ export function renderImpactGraphHtml(graph: ImpactGraph, options: RenderImpactG
     .graph-svg.dense .edge { opacity: .46; stroke-width: 1.2; }
     .graph-svg.dense .node circle { stroke-width: 2; }
     .graph-svg.dense .node.selected circle { stroke: var(--selected); stroke-width: 3.4; }
-    .edge { stroke: var(--edge); stroke-width: 1.5; opacity: .74; marker-end: url(#arrow); cursor: pointer; }
+    .edge { fill: none; stroke: var(--edge); stroke-width: 1.5; opacity: .74; marker-end: url(#arrow); cursor: pointer; }
     .edge.call { stroke: var(--method); }
     .edge.write { stroke: var(--danger); }
     .edge.read { stroke: #22c55e; }
@@ -865,6 +877,71 @@ export function renderImpactGraphHtml(graph: ImpactGraph, options: RenderImpactG
       font-weight: 760;
     }
     .empty { padding: 16px; color: var(--muted); font-size: 13px; line-height: 1.45; }
+    .command-palette { position: fixed; inset: 0; z-index: 60; display: flex; align-items: flex-start; justify-content: center; }
+    .command-palette[hidden] { display: none; }
+    .command-palette-backdrop { position: absolute; inset: 0; background: rgba(0, 0, 0, .42); }
+    .command-palette-box {
+      position: relative;
+      margin-top: 10vh;
+      width: min(640px, 92vw);
+      max-height: 70vh;
+      display: flex;
+      flex-direction: column;
+      border: 1px solid var(--border-strong);
+      border-radius: 10px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .command-palette-box input {
+      height: 46px;
+      border: 0;
+      border-bottom: 1px solid var(--border);
+      background: var(--panel-2);
+      color: var(--text);
+      padding: 0 14px;
+      outline: none;
+      font-size: 15px;
+    }
+    .command-palette-results { min-height: 0; overflow: auto; padding: 6px; }
+    .palette-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 10px;
+      border-radius: 7px;
+      cursor: pointer;
+    }
+    .palette-item.active { background: color-mix(in srgb, var(--target) 16%, var(--panel-2) 84%); }
+    .palette-kind {
+      flex: none;
+      min-width: 64px;
+      font-size: 9px;
+      font-weight: 800;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .palette-label { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 640; }
+    .palette-hint { flex: none; color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 42%; }
+    .command-palette-foot { display: flex; gap: 14px; padding: 7px 14px; border-top: 1px solid var(--border); color: var(--subtle); font-size: 11px; }
+    .graph-minimap {
+      position: absolute;
+      right: 14px;
+      bottom: 14px;
+      width: 180px;
+      height: 130px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--panel) 86%, var(--bg) 14%);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      cursor: pointer;
+    }
+    .graph-stage { position: relative; }
+    .minimap-node { fill: var(--muted); }
+    .minimap-node.target { fill: var(--target); }
+    .minimap-viewport { fill: color-mix(in srgb, var(--target) 16%, transparent); stroke: var(--target); stroke-width: 1.5; }
     @media (max-width: 1240px) {
       .workspace { grid-template-columns: 270px minmax(0, 1fr); overflow: auto; }
       .workspace.sequence-focus-mode { grid-template-columns: 270px minmax(0, 1fr); overflow: hidden; }
@@ -969,6 +1046,9 @@ export function renderImpactGraphHtml(graph: ImpactGraph, options: RenderImpactG
             <div id="sequenceScroller" class="sequence-scroller">
               <svg id="sequenceSvg" class="sequence-svg" role="img" aria-label="API sequence flow"></svg>
             </div>
+            <div id="sequenceHeaderOverlay" class="sequence-header-overlay" aria-hidden="true">
+              <svg id="sequenceHeaderSvg"></svg>
+            </div>
             <details class="mermaid-box">
               <summary><span>Mermaid sequence</span></summary>
               <pre id="mermaidText"></pre>
@@ -1031,6 +1111,7 @@ export function renderImpactGraphHtml(graph: ImpactGraph, options: RenderImpactG
           </div>
           <div class="graph-stage">
             <svg id="graphSvg" class="graph-svg" role="img" aria-label="Impact graph"></svg>
+            <svg id="graphMinimap" class="graph-minimap" role="img" aria-label="Graph minimap" hidden></svg>
           </div>
         </section>
       </main>
@@ -1048,6 +1129,14 @@ export function renderImpactGraphHtml(graph: ImpactGraph, options: RenderImpactG
           <div id="flowSteps" class="step-list"></div>
         </section>
       </aside>
+    </div>
+  </div>
+  <div id="commandPalette" class="command-palette" hidden>
+    <div class="command-palette-backdrop" id="commandPaletteBackdrop"></div>
+    <div class="command-palette-box" role="dialog" aria-label="Command palette">
+      <input id="paletteInput" type="text" placeholder="Jump to flow, file, test, reference, node... (Esc to close)" autocomplete="off" spellcheck="false">
+      <div id="paletteResults" class="command-palette-results"></div>
+      <div class="command-palette-foot"><span>&#8593;&#8595; navigate</span><span>&#8629; open</span><span>esc close</span></div>
     </div>
   </div>
   <script>
@@ -1100,6 +1189,10 @@ ${webviewMessageTypesJs}
     const graphSvg = document.getElementById('graphSvg');
     const sequenceSvg = document.getElementById('sequenceSvg');
     const sequenceScroller = document.getElementById('sequenceScroller');
+    const paletteEl = document.getElementById('commandPalette');
+    const paletteInput = document.getElementById('paletteInput');
+    const paletteResultsEl = document.getElementById('paletteResults');
+    const palette = { open: false, items: [], filtered: [], active: 0 };
     const MIN_SEQUENCE_ZOOM = 0.38;
     const MAX_SEQUENCE_FIT_ZOOM = 1.08;
     let sequenceFitFrame = 0;
@@ -1186,7 +1279,130 @@ ${webviewMessageTypesJs}
         if (state.activeTab === 'sequence') scheduleSequenceFit();
         if (state.activeTab === 'graph') drawGraph();
       });
+      bindCommandPalette();
       renderGraphControls();
+    }
+
+    function bindCommandPalette() {
+      document.addEventListener('keydown', event => {
+        const inField = event.target && /^(input|textarea|select)$/i.test(event.target.tagName || '');
+        if ((event.ctrlKey || event.metaKey) && (event.key === 'p' || event.key === 'P' || event.key === 'k' || event.key === 'K')) {
+          event.preventDefault();
+          openCommandPalette();
+          return;
+        }
+        if (event.key === '/' && !inField && !palette.open) {
+          event.preventDefault();
+          openCommandPalette();
+          return;
+        }
+        if (!palette.open) return;
+        if (event.key === 'Escape') { event.preventDefault(); closeCommandPalette(); }
+        else if (event.key === 'ArrowDown') { event.preventDefault(); moveCommandPalette(1); }
+        else if (event.key === 'ArrowUp') { event.preventDefault(); moveCommandPalette(-1); }
+        else if (event.key === 'Enter') { event.preventDefault(); execCommandPaletteActive(); }
+      });
+      paletteInput.addEventListener('input', () => filterCommandPalette(paletteInput.value));
+      document.getElementById('commandPaletteBackdrop').onclick = closeCommandPalette;
+    }
+
+    function buildCommandPaletteIndex() {
+      const items = [];
+      items.push({ kind: 'view', label: 'Sequence diagram', hint: 'tab', run: () => setActiveTab('sequence') });
+      items.push({ kind: 'view', label: 'Static Debugger', hint: 'tab', run: () => setActiveTab('static-debug') });
+      items.push({ kind: 'view', label: 'References', hint: 'tab', run: () => setActiveTab('references') });
+      items.push({ kind: 'view', label: 'Impact graph', hint: 'tab', run: () => setActiveTab('graph') });
+      (graph.flows || []).forEach((flow, index) => {
+        const endpoint = flow.endpoint || endpointFromLabel(flow.label);
+        items.push({
+          kind: 'flow',
+          label: (endpoint.method || 'API') + ' ' + (endpoint.path || flow.label),
+          hint: flow.steps.length + ' steps',
+          run: () => { state.activeFlow = index; state.activeDebugStep = 0; clearSelection(); renderFlowList(); renderSequence(); renderStaticDebugger(); setActiveTab('sequence'); }
+        });
+      });
+      suggestedTestFiles().forEach(item => {
+        items.push({ kind: 'test', label: shortFile(item.file), hint: 'run test', run: () => runTestCommand(testCommandForFile(item.file)) });
+      });
+      (graph.evidence || []).slice(0, 400).forEach(item => {
+        items.push({ kind: item.kind || 'ref', label: shortFile(item.file) + ':' + item.line, hint: trimLabel(item.text || item.enclosingSymbol || '', 48), run: () => { selectEvidence(item, true); setActiveTab('references'); } });
+      });
+      (graph.nodes || []).forEach(node => {
+        items.push({ kind: 'node', label: node.label, hint: node.kind, run: () => { state.graphScope = 'raw'; selectNode(node); setActiveTab('graph'); } });
+      });
+      return items;
+    }
+
+    function openCommandPalette() {
+      palette.open = true;
+      palette.items = buildCommandPaletteIndex();
+      paletteEl.hidden = false;
+      paletteInput.value = '';
+      filterCommandPalette('');
+      paletteInput.focus();
+    }
+
+    function closeCommandPalette() {
+      palette.open = false;
+      paletteEl.hidden = true;
+    }
+
+    function fuzzyScore(query, text) {
+      const q = query.toLowerCase();
+      const t = String(text || '').toLowerCase();
+      if (!q) return 1;
+      const direct = t.indexOf(q);
+      if (direct >= 0) return 1000 - direct;
+      let qi = 0;
+      let score = 0;
+      for (let ti = 0; ti < t.length && qi < q.length; ti++) {
+        if (t[ti] === q[qi]) { score += 1; qi++; }
+      }
+      return qi === q.length ? score : -1;
+    }
+
+    function filterCommandPalette(query) {
+      const scored = palette.items
+        .map(item => ({ item, score: Math.max(fuzzyScore(query, item.label), fuzzyScore(query, item.hint) - 2) }))
+        .filter(entry => entry.score >= 0)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 60)
+        .map(entry => entry.item);
+      palette.filtered = scored;
+      palette.active = 0;
+      renderCommandPalette();
+    }
+
+    function renderCommandPalette() {
+      if (!palette.filtered.length) {
+        paletteResultsEl.innerHTML = '<div class="empty">No matches.</div>';
+        return;
+      }
+      paletteResultsEl.innerHTML = palette.filtered.map((item, index) =>
+        '<div class="palette-item ' + (index === palette.active ? 'active' : '') + '" data-palette-index="' + index + '">' +
+          '<span class="palette-kind">' + escapeHtml(item.kind) + '</span>' +
+          '<span class="palette-label">' + escapeHtml(item.label) + '</span>' +
+          '<span class="palette-hint">' + escapeHtml(item.hint || '') + '</span>' +
+        '</div>'
+      ).join('');
+      paletteResultsEl.querySelectorAll('[data-palette-index]').forEach(node => {
+        node.onclick = () => { palette.active = Number(node.dataset.paletteIndex || 0); execCommandPaletteActive(); };
+      });
+    }
+
+    function moveCommandPalette(delta) {
+      if (!palette.filtered.length) return;
+      palette.active = (palette.active + delta + palette.filtered.length) % palette.filtered.length;
+      renderCommandPalette();
+      const active = paletteResultsEl.querySelector('.palette-item.active');
+      if (active && active.scrollIntoView) active.scrollIntoView({ block: 'nearest' });
+    }
+
+    function execCommandPaletteActive() {
+      const item = palette.filtered[palette.active];
+      if (!item) return;
+      closeCommandPalette();
+      try { item.run(); } catch {}
     }
 
     function setActiveTab(tabName) {
@@ -1499,6 +1715,8 @@ ${webviewMessageTypesJs}
         sequenceSvg.appendChild(line);
       });
 
+      buildFrozenSequenceHeader(model, width, left, laneWidth, lanePadding, top);
+
       const stepById = new Map(flow.steps.map(step => [step.id, step]));
 
       // Activation bars: execution occurrence on the target lifeline per call-like message.
@@ -1621,6 +1839,44 @@ ${webviewMessageTypesJs}
       });
     }
 
+    function buildFrozenSequenceHeader(model, width, left, laneWidth, lanePadding, top) {
+      const headerSvg = document.getElementById('sequenceHeaderSvg');
+      if (!headerSvg) return;
+      const freezeHeight = top + 44 + 10;
+      const participantWidth = laneWidth - lanePadding;
+      headerSvg.dataset.baseWidth = String(width);
+      headerSvg.dataset.freezeHeight = String(freezeHeight);
+      headerSvg.setAttribute('viewBox', '0 0 ' + width + ' ' + freezeHeight);
+      let markup = '<rect class="seq-header-bg" x="0" y="0" width="' + width + '" height="' + freezeHeight + '"></rect>';
+      model.participants.forEach(participant => {
+        const x = participant.x;
+        const isClient = participant.id === 'Client';
+        markup += '<rect class="seq-participant-box' + (isClient ? ' actor-client' : '') + '" x="' + (x - participantWidth / 2) + '" y="' + top + '" width="' + participantWidth + '" height="44" rx="7"></rect>';
+        markup += '<text class="seq-participant-name" x="' + x + '" y="' + (top + 22) + '" text-anchor="middle" font-size="12" font-weight="760">' + escapeHtml(trimLabel(participant.label, 22)) + '</text>';
+        markup += '<text class="seq-participant-role" x="' + x + '" y="' + (top + 38) + '" text-anchor="middle" font-size="10">' + escapeHtml(trimLabel(participant.role || 'participant', 16)) + '</text>';
+      });
+      headerSvg.innerHTML = markup;
+      syncSequenceHeader();
+    }
+
+    function syncSequenceHeader() {
+      const overlay = document.getElementById('sequenceHeaderOverlay');
+      const headerSvg = document.getElementById('sequenceHeaderSvg');
+      if (!overlay || !headerSvg) return;
+      const baseWidth = Number(headerSvg.dataset.baseWidth);
+      const show = state.activeTab === 'sequence' && Boolean(activeFlow()) && baseWidth > 0 && sequenceScroller.scrollTop > 2;
+      overlay.classList.toggle('visible', show);
+      if (!show) return;
+      const freezeHeight = Number(headerSvg.dataset.freezeHeight) || 76;
+      overlay.style.top = (sequenceScroller.offsetTop + 14) + 'px';
+      overlay.style.left = (sequenceScroller.offsetLeft + 14) + 'px';
+      overlay.style.width = Math.max(0, sequenceScroller.clientWidth - 28) + 'px';
+      overlay.style.height = Math.round(freezeHeight * state.sequenceZoom) + 'px';
+      headerSvg.style.width = Math.round(baseWidth * state.sequenceZoom) + 'px';
+      headerSvg.style.height = Math.round(freezeHeight * state.sequenceZoom) + 'px';
+      headerSvg.style.transform = 'translateX(' + (-sequenceScroller.scrollLeft) + 'px)';
+    }
+
     function drawEmptySequence() {
       const width = Math.max(720, sequenceScroller.clientWidth || 860);
       const height = Math.max(420, sequenceScroller.clientHeight || 520);
@@ -1643,6 +1899,10 @@ ${webviewMessageTypesJs}
       sequenceSvg.appendChild(title);
       sequenceSvg.appendChild(line1);
       sequenceSvg.appendChild(line2);
+      const headerSvg = document.getElementById('sequenceHeaderSvg');
+      if (headerSvg) { headerSvg.innerHTML = ''; delete headerSvg.dataset.baseWidth; }
+      const overlay = document.getElementById('sequenceHeaderOverlay');
+      if (overlay) overlay.classList.remove('visible');
     }
 
     function renderFlowSteps(flow) {
@@ -2264,6 +2524,8 @@ ${webviewNormalizedCommandsJs}
       graphSvg.innerHTML = '<defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#697586"></path></marker></defs>';
       if (state.graphScope === 'map') {
         graphSvg.classList.remove('dense');
+        const minimap = document.getElementById('graphMinimap');
+        if (minimap) minimap.hidden = true;
         drawImpactMap(width, height);
         return;
       }
@@ -2300,12 +2562,15 @@ ${webviewNormalizedCommandsJs}
         const to = positions.get(edge.to);
         if (!from || !to) return;
         const focused = !state.graphHoverId || (neighbors.has(edge.from) && neighbors.has(edge.to));
-        const line = svgEl('line', {
+        const dx = to.x - from.x;
+        const dy = to.y - from.y;
+        const len = Math.hypot(dx, dy) || 1;
+        const bend = Math.min(40, len * 0.16);
+        const mx = (from.x + to.x) / 2 - (dy / len) * bend;
+        const my = (from.y + to.y) / 2 + (dx / len) * bend;
+        const line = svgEl('path', {
           class: 'edge ' + edge.kind + (state.selectedId === edge.id || state.selectedId === edge.meta?.evidenceId ? ' selected' : '') + (focused ? ' focus-match' : ''),
-          x1: from.x,
-          y1: from.y,
-          x2: to.x,
-          y2: to.y,
+          d: 'M ' + from.x + ' ' + from.y + ' Q ' + mx + ' ' + my + ' ' + to.x + ' ' + to.y,
           'data-edge-id': edge.id
         });
         line.onclick = () => selectEdge(edge);
@@ -2333,6 +2598,46 @@ ${webviewNormalizedCommandsJs}
         group.onclick = () => { if (!graphInteraction.dragMoved) selectNode(item.node); };
         viewport.appendChild(group);
       });
+      drawGraphMinimap(positions, width, height);
+    }
+
+    function drawGraphMinimap(positions, width, height) {
+      const minimap = document.getElementById('graphMinimap');
+      if (!minimap) return;
+      const items = [...positions.values()];
+      if (items.length < 12) { minimap.hidden = true; minimap.innerHTML = ''; return; }
+      minimap.hidden = false;
+      const xs = items.map(item => item.x);
+      const ys = items.map(item => item.y);
+      const minX = Math.min(...xs) - 30;
+      const maxX = Math.max(...xs) + 30;
+      const minY = Math.min(...ys) - 30;
+      const maxY = Math.max(...ys) + 30;
+      const w = Math.max(1, maxX - minX);
+      const h = Math.max(1, maxY - minY);
+      minimap.setAttribute('viewBox', minX + ' ' + minY + ' ' + w + ' ' + h);
+      let markup = '';
+      items.forEach(item => {
+        markup += '<circle class="minimap-node ' + (item.node.kind === 'target' ? 'target' : '') + '" cx="' + item.x + '" cy="' + item.y + '" r="' + (item.node.kind === 'target' ? 9 : 5) + '"></circle>';
+      });
+      // Current viewport rectangle in graph coordinate space.
+      const scale = state.graphView.scale || 1;
+      const vx = (-state.graphView.tx) / scale;
+      const vy = (-state.graphView.ty) / scale;
+      const vw = width / scale;
+      const vh = height / scale;
+      markup += '<rect class="minimap-viewport" x="' + vx + '" y="' + vy + '" width="' + vw + '" height="' + vh + '"></rect>';
+      minimap.innerHTML = markup;
+      minimap.onclick = event => {
+        const rect = minimap.getBoundingClientRect();
+        const ratioX = (event.clientX - rect.left) / rect.width;
+        const ratioY = (event.clientY - rect.top) / rect.height;
+        const targetX = minX + ratioX * w;
+        const targetY = minY + ratioY * h;
+        state.graphView.tx = width / 2 - targetX * scale;
+        state.graphView.ty = height / 2 - targetY * scale;
+        drawGraph();
+      };
     }
 
     function bindGraphInteractions() {
@@ -2778,6 +3083,7 @@ ${webviewNormalizedCommandsJs}
         const direction = event.deltaY < 0 ? 1 : -1;
         setSequenceZoom(state.sequenceZoom + direction * 0.12);
       }, { passive: false });
+      sequenceScroller.addEventListener('scroll', syncSequenceHeader, { passive: true });
     }
 
     function startSequencePan(event) {

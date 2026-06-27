@@ -167,6 +167,19 @@ class UserListingPage {}
     expect(html).toContain('function exportPngFile');
     expect(html).toContain('toggleNavPanel');
     expect(html).toContain('toggleInspectorPanel');
+
+    // Navigation/overview batch: command palette, graph minimap, curved edges.
+    expect(html).toContain('commandPalette');
+    expect(html).toContain('function buildCommandPaletteIndex');
+    expect(html).toContain('function fuzzyScore');
+    expect(html).toContain('function drawGraphMinimap');
+    expect(html).toContain('graphMinimap');
+    expect(html).toContain('minimap-viewport');
+
+    // Frozen/sticky participant header while scrolling a long sequence.
+    expect(html).toContain('sequenceHeaderOverlay');
+    expect(html).toContain('function buildFrozenSequenceHeader');
+    expect(html).toContain('function syncSequenceHeader');
   });
 
   it('uses sendWebviewMessage for extension-bound webview actions', () => {
