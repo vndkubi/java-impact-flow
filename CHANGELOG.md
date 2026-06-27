@@ -1,5 +1,23 @@
 # Change Log
 
+## 0.1.11 - 2026-06-27
+
+- Reworked the sequence diagram into a proper UML view: combined fragments
+  (`alt`/`opt`/`loop`/`try`) framed around branch, loop, and exception steps,
+  activation bars on target lifelines, and dashed lines for low-confidence
+  (<50%) steps.
+- Made the sequence and empty-state SVG theme-aware by replacing hard-coded
+  dark hex colors with CSS-variable-driven classes, and switched the webview to
+  `color-scheme: light dark` so light VS Code themes render correctly.
+- Added Ctrl/Cmd + scroll zoom to the sequence canvas.
+- Replaced the concentric raw-graph layout with a layered (BFS-distance)
+  layout that uses barycenter ordering to reduce edge crossings.
+- Added pan, wheel-zoom, and node drag to the impact graph, plus hover-to-focus
+  dimming that highlights a node and its direct neighbors.
+- Added SVG and PNG export for both the sequence and impact graph views.
+- Added collapsible sidebar and inspector panels to give the diagram more room.
+- Extended render regression coverage to assert all of the above markers.
+
 ## 0.1.10 - 2026-06-22
 
 - Expanded the Sequence tab into a focused layout by hiding the right inspector

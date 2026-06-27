@@ -33,7 +33,7 @@ export function renderImpactGraphHtml(graph: ImpactGraph, options: RenderImpactG
   <title>Ext Graph Impact View</title>
   <style>
     :root {
-      color-scheme: dark;
+      color-scheme: light dark;
       --bg: var(--vscode-editor-background, #0f1117);
       --panel: var(--vscode-sideBar-background, #151923);
       --panel-2: var(--vscode-editorWidget-background, #1b2130);
@@ -110,7 +110,13 @@ export function renderImpactGraphHtml(graph: ImpactGraph, options: RenderImpactG
     }
     .stat-chip span { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }
     .stat-chip strong { color: var(--text); font-size: 14px; line-height: 1.1; }
+    .header-controls { display: inline-flex; align-items: center; gap: 8px; justify-self: end; }
     .tabs { display: inline-flex; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; background: var(--panel); }
+    .workspace.nav-collapsed { grid-template-columns: 0 minmax(0, 1fr) 360px; }
+    .workspace.nav-collapsed .nav-panel { display: none; }
+    .workspace.inspector-collapsed { grid-template-columns: 330px minmax(0, 1fr) 0; }
+    .workspace.inspector-collapsed .inspector { display: none; }
+    .workspace.nav-collapsed.inspector-collapsed { grid-template-columns: 0 minmax(0, 1fr) 0; }
     .tab {
       height: 34px;
       min-width: 96px;
@@ -504,6 +510,28 @@ export function renderImpactGraphHtml(graph: ImpactGraph, options: RenderImpactG
     .message:hover text.label { fill: var(--target); }
     .message.selected .message-line, .message.selected path { stroke: var(--selected); stroke-width: 2.8; }
     .message.selected text.label { fill: var(--selected); font-weight: 760; }
+    .message.low-confidence .message-line, .message.low-confidence path { stroke-dasharray: 3 4; }
+    .sequence-svg.dim-others .message:not(.focus-match) { opacity: .22; }
+    .seq-header-bg { fill: color-mix(in srgb, var(--panel) 88%, var(--bg) 12%); }
+    .seq-participant-box { fill: var(--panel); stroke: var(--border); }
+    .seq-participant-box.actor-client { fill: color-mix(in srgb, var(--target) 16%, var(--panel) 84%); stroke: color-mix(in srgb, var(--target) 50%, var(--border) 50%); }
+    .seq-participant-name { fill: var(--text); }
+    .seq-participant-role { fill: var(--muted); }
+    .seq-lifeline { stroke: var(--border); }
+    .seq-band-even { fill: color-mix(in srgb, var(--text) 2%, transparent); }
+    .seq-band-odd { fill: color-mix(in srgb, var(--text) 4%, transparent); }
+    .seq-badge { fill: var(--panel-3); }
+    .seq-badge-text { fill: var(--text); }
+    .seq-loc { fill: var(--muted); }
+    .seq-confidence { fill: var(--subtle); }
+    .seq-activation { fill: color-mix(in srgb, var(--target) 22%, var(--panel-2) 78%); stroke: color-mix(in srgb, var(--target) 46%, var(--border) 54%); }
+    .seq-fragment rect { fill: color-mix(in srgb, var(--symbol) 7%, transparent); stroke: color-mix(in srgb, var(--symbol) 50%, var(--border) 50%); stroke-dasharray: 6 4; }
+    .seq-fragment.frag-loop rect { stroke: color-mix(in srgb, var(--method) 52%, var(--border) 48%); }
+    .seq-fragment.frag-exception rect { stroke: color-mix(in srgb, var(--danger) 52%, var(--border) 48%); }
+    .seq-fragment-tab { fill: color-mix(in srgb, var(--symbol) 24%, var(--panel-2) 76%); }
+    .seq-fragment.frag-loop .seq-fragment-tab { fill: color-mix(in srgb, var(--method) 24%, var(--panel-2) 76%); }
+    .seq-fragment.frag-exception .seq-fragment-tab { fill: color-mix(in srgb, var(--danger) 24%, var(--panel-2) 76%); }
+    .seq-fragment-label { fill: var(--text); font-size: 10px; font-weight: 760; text-transform: uppercase; letter-spacing: .05em; }
     .sequence-legend {
       display: flex;
       align-items: center;
@@ -743,7 +771,13 @@ export function renderImpactGraphHtml(graph: ImpactGraph, options: RenderImpactG
       display: block;
       background-image: radial-gradient(circle at 1px 1px, rgba(148, 163, 184, .16) 1px, transparent 0);
       background-size: 24px 24px;
+      cursor: grab;
+      touch-action: none;
     }
+    .graph-svg:active { cursor: grabbing; }
+    .graph-svg .node { cursor: pointer; }
+    .graph-svg.focus-mode .node:not(.focus-match) { opacity: .16; }
+    .graph-svg.focus-mode .edge:not(.focus-match) { opacity: .08; }
     .map-lane rect { fill: rgba(27, 33, 48, .52); stroke: var(--border); }
     .map-lane text { fill: var(--muted); font-size: 11px; font-weight: 760; letter-spacing: .06em; text-transform: uppercase; }
     .map-node { cursor: pointer; }
@@ -870,11 +904,15 @@ export function renderImpactGraphHtml(graph: ImpactGraph, options: RenderImpactG
         <div class="meta" id="flowCrumbMeta"></div>
       </div>
       <div class="top-stats" id="topStats"></div>
-      <div class="tabs" aria-label="Impact views">
-        <button class="tab active" data-tab="sequence">Sequence</button>
-        <button class="tab" data-tab="static-debug">Static Debug</button>
-        <button class="tab" data-tab="references">References</button>
-        <button class="tab" data-tab="graph">Graph</button>
+      <div class="header-controls">
+        <button class="icon-btn" id="toggleNavPanel" title="Toggle sidebar" aria-label="Toggle sidebar">&#9776;</button>
+        <div class="tabs" aria-label="Impact views">
+          <button class="tab active" data-tab="sequence">Sequence</button>
+          <button class="tab" data-tab="static-debug">Static Debug</button>
+          <button class="tab" data-tab="references">References</button>
+          <button class="tab" data-tab="graph">Graph</button>
+        </div>
+        <button class="icon-btn" id="toggleInspectorPanel" title="Toggle inspector" aria-label="Toggle inspector">&#9783;</button>
       </div>
     </header>
     <div id="workspace" class="workspace">
@@ -921,6 +959,8 @@ export function renderImpactGraphHtml(graph: ImpactGraph, options: RenderImpactG
               <button class="icon-btn" id="zoomIn" aria-label="Zoom in">+</button>
               <button class="action-btn active" id="toggleLabels">Labels</button>
               <button class="action-btn" id="copyMermaid">Copy Mermaid</button>
+              <button class="action-btn" id="exportSequenceSvg">Export SVG</button>
+              <button class="action-btn" id="exportSequencePng">Export PNG</button>
             </div>
           </div>
           <div class="sequence-stage">
@@ -985,6 +1025,8 @@ export function renderImpactGraphHtml(graph: ImpactGraph, options: RenderImpactG
               </div>
               <button class="action-btn" id="toggleGraphLabels">Labels</button>
               <button class="action-btn" id="redrawGraph">Fit Graph</button>
+              <button class="action-btn" id="exportGraphSvg">Export SVG</button>
+              <button class="action-btn" id="exportGraphPng">Export PNG</button>
             </div>
           </div>
           <div class="graph-stage">
@@ -1049,8 +1091,12 @@ ${webviewMessageTypesJs}
         suppressClick: false
       },
       graphScope: 'map',
-      graphLabels: !denseGraph
+      graphLabels: !denseGraph,
+      graphView: { scale: 1, tx: 0, ty: 0 },
+      graphNodePos: {},
+      graphHoverId: null
     };
+    const graphInteraction = { bound: false, panning: false, pointerId: null, startX: 0, startY: 0, baseTx: 0, baseTy: 0, dragNodeId: null, dragMoved: false };
     const graphSvg = document.getElementById('graphSvg');
     const sequenceSvg = document.getElementById('sequenceSvg');
     const sequenceScroller = document.getElementById('sequenceScroller');
@@ -1090,6 +1136,10 @@ ${webviewMessageTypesJs}
         const text = document.getElementById('mermaidText').textContent || '';
         try { await navigator.clipboard.writeText(text); } catch {}
       };
+      document.getElementById('exportSequenceSvg').onclick = () => exportSvgFile(sequenceSvg, exportFileStem('sequence.svg'));
+      document.getElementById('exportSequencePng').onclick = () => exportPngFile(sequenceSvg, exportFileStem('sequence.png'));
+      document.getElementById('exportGraphSvg').onclick = () => exportSvgFile(graphSvg, exportFileStem('graph.svg'));
+      document.getElementById('exportGraphPng').onclick = () => exportPngFile(graphSvg, exportFileStem('graph.png'));
       bindSequencePan();
       document.getElementById('refSearch').oninput = renderReferences;
       document.getElementById('quickRefSearch').oninput = renderQuickReferences;
@@ -1103,7 +1153,12 @@ ${webviewMessageTypesJs}
         state.graphLabels = !state.graphLabels;
         drawGraph();
       };
-      document.getElementById('redrawGraph').onclick = drawGraph;
+      document.getElementById('redrawGraph').onclick = () => {
+        state.graphView = { scale: 1, tx: 0, ty: 0 };
+        state.graphNodePos = {};
+        state.graphHoverId = null;
+        drawGraph();
+      };
       document.getElementById('debugPrevStep').onclick = () => selectStaticDebugStep(state.activeDebugStep - 1);
       document.getElementById('debugNextStep').onclick = () => selectStaticDebugStep(state.activeDebugStep + 1);
       document.getElementById('debugOpenSource').onclick = () => {
@@ -1112,6 +1167,20 @@ ${webviewMessageTypesJs}
       };
       document.getElementById('copyStaticDebugTrace').onclick = async () => {
         await copyText(staticDebugTraceMarkdown(activeStaticDebugSession()));
+      };
+      document.getElementById('toggleNavPanel').onclick = () => {
+        const workspace = document.getElementById('workspace');
+        workspace.classList.toggle('nav-collapsed');
+        document.getElementById('toggleNavPanel').classList.toggle('active', workspace.classList.contains('nav-collapsed'));
+        if (state.activeTab === 'sequence') scheduleSequenceFit();
+        if (state.activeTab === 'graph') drawGraph();
+      };
+      document.getElementById('toggleInspectorPanel').onclick = () => {
+        const workspace = document.getElementById('workspace');
+        workspace.classList.toggle('inspector-collapsed');
+        document.getElementById('toggleInspectorPanel').classList.toggle('active', workspace.classList.contains('inspector-collapsed'));
+        if (state.activeTab === 'sequence') scheduleSequenceFit();
+        if (state.activeTab === 'graph') drawGraph();
       };
       window.addEventListener('resize', () => {
         if (state.activeTab === 'sequence') scheduleSequenceFit();
@@ -1390,19 +1459,40 @@ ${webviewMessageTypesJs}
         markerDef('seqArrowThrow', '#f87171'),
       ].join('');
       sequenceSvg.appendChild(defs);
-      const headerBg = svgEl('rect', { x: 0, y: 0, width, height: 94, fill: 'rgba(27, 33, 48, .94)' });
+      const headerBg = svgEl('rect', { class: 'seq-header-bg', x: 0, y: 0, width, height: 94 });
       sequenceSvg.appendChild(headerBg);
+
+      const rowY = index => top + messageTop + index * rowHeight;
+
+      // Combined fragments (alt/opt/loop/try) drawn behind messages.
+      const messageRowByStepId = new Map(model.messages.map((message, index) => [message.stepId, index]));
+      const fragments = sequenceFragments(flow, messageRowByStepId);
+      fragments.forEach(fragment => {
+        const inset = 70 + Math.min(fragment.depth, 4) * 12;
+        const fx = inset;
+        const fwidth = Math.max(160, width - inset * 2);
+        const fy = rowY(fragment.startRow) - 44;
+        const fheight = (fragment.endRow - fragment.startRow) * rowHeight + 60;
+        const group = svgEl('g', { class: 'seq-fragment frag-' + fragment.kind });
+        group.appendChild(svgEl('rect', { x: fx, y: fy, width: fwidth, height: fheight, rx: 8 }));
+        group.appendChild(svgEl('rect', { class: 'seq-fragment-tab', x: fx, y: fy, width: 58 + fragment.label.length * 2, height: 18, rx: 4 }));
+        const tab = svgEl('text', { class: 'seq-fragment-label', x: fx + 8, y: fy + 13 });
+        tab.textContent = sequenceKindLabel(fragment.kind) + ' ' + trimLabel(fragment.label, 30);
+        group.appendChild(tab);
+        sequenceSvg.appendChild(group);
+      });
 
       model.participants.forEach((participant, index) => {
         const x = left + index * laneWidth + laneWidth / 2;
         const participantWidth = laneWidth - lanePadding;
         participant.x = x;
-        const box = svgEl('rect', { x: x - participantWidth / 2, y: top, width: participantWidth, height: 44, rx: 7, fill: '#151923', stroke: '#2a3343' });
-        const text = svgEl('text', { x, y: top + 22, 'text-anchor': 'middle', 'font-size': 12, 'font-weight': 760, fill: '#e7edf6' });
+        const isClient = participant.id === 'Client';
+        const box = svgEl('rect', { class: 'seq-participant-box' + (isClient ? ' actor-client' : ''), x: x - participantWidth / 2, y: top, width: participantWidth, height: 44, rx: 7 });
+        const text = svgEl('text', { class: 'seq-participant-name', x, y: top + 22, 'text-anchor': 'middle', 'font-size': 12, 'font-weight': 760 });
         text.textContent = trimLabel(participant.label, 22);
-        const role = svgEl('text', { x, y: top + 38, 'text-anchor': 'middle', 'font-size': 10, fill: '#9aa6b8' });
+        const role = svgEl('text', { class: 'seq-participant-role', x, y: top + 38, 'text-anchor': 'middle', 'font-size': 10 });
         role.textContent = trimLabel(participant.role || 'participant', 16);
-        const line = svgEl('line', { x1: x, y1: top + 48, x2: x, y2: height - 24, stroke: '#334155', 'stroke-dasharray': '5 6' });
+        const line = svgEl('line', { class: 'seq-lifeline', x1: x, y1: top + 48, x2: x, y2: height - 24, 'stroke-dasharray': '5 6' });
         sequenceSvg.appendChild(box);
         sequenceSvg.appendChild(text);
         sequenceSvg.appendChild(role);
@@ -1410,12 +1500,22 @@ ${webviewMessageTypesJs}
       });
 
       const stepById = new Map(flow.steps.map(step => [step.id, step]));
+
+      // Activation bars: execution occurrence on the target lifeline per call-like message.
       model.messages.forEach((message, index) => {
-        const y = top + messageTop + index * rowHeight;
+        if (message.kind === 'return' || message.kind === 'throw' || message.kind === 'branch' || message.kind === 'loop' || message.kind === 'exception' || message.kind === 'annotation') return;
+        const to = model.participants.find(item => item.id === message.to);
+        const from = model.participants.find(item => item.id === message.from);
+        if (!to || to.id === message.from) return;
+        const y = rowY(index);
+        sequenceSvg.appendChild(svgEl('rect', { class: 'seq-activation', x: to.x - 4, y: y - 6, width: 8, height: rowHeight * 0.78, rx: 2 }));
+      });
+      model.messages.forEach((message, index) => {
+        const y = rowY(index);
         const from = model.participants.find(item => item.id === message.from);
         const to = model.participants.find(item => item.id === message.to);
         if (!from || !to) return;
-        const band = svgEl('rect', { x: 0, y: y - 34, width, height: rowHeight, fill: index % 2 === 0 ? 'rgba(255,255,255,.018)' : 'rgba(255,255,255,.04)' });
+        const band = svgEl('rect', { class: index % 2 === 0 ? 'seq-band-even' : 'seq-band-odd', x: 0, y: y - 34, width, height: rowHeight });
         const markerId = message.kind === 'return'
           ? 'seqArrowReturn'
           : message.kind === 'throw'
@@ -1425,8 +1525,10 @@ ${webviewMessageTypesJs}
               : 'seqArrow';
         const lineStyle = message.kind === 'branch' || message.kind === 'loop' || message.kind === 'exception' ? '4 6' : '';
         sequenceSvg.appendChild(band);
+        const source0 = stepById.get(message.stepId);
+        const lowConfidence = (source0?.confidence ?? 1) < 0.5;
         const group = svgEl('g', {
-          class: 'message message-' + message.kind + (state.selectedId === message.stepId ? ' selected' : ''),
+          class: 'message message-' + message.kind + (lowConfidence ? ' low-confidence' : '') + (state.selectedId === message.stepId ? ' selected' : ''),
           'data-step-id': message.stepId,
         });
         const same = from.id === to.id;
@@ -1464,8 +1566,8 @@ ${webviewMessageTypesJs}
           });
           group.appendChild(line);
         }
-        const badge = svgEl('circle', { cx: Math.min(x1, x2) + 16, cy: y - 17, r: 11, fill: '#111722', stroke: color });
-        const badgeText = svgEl('text', { x: Math.min(x1, x2) + 16, y: y - 13, 'text-anchor': 'middle', 'font-size': 9, 'font-weight': 760, fill: '#e7edf6' });
+        const badge = svgEl('circle', { class: 'seq-badge', cx: Math.min(x1, x2) + 16, cy: y - 17, r: 11, stroke: color });
+        const badgeText = svgEl('text', { class: 'seq-badge-text', x: Math.min(x1, x2) + 16, y: y - 13, 'text-anchor': 'middle', 'font-size': 9, 'font-weight': 760 });
         badgeText.textContent = String(index + 1);
         const endpointMeta = message.kind === 'return' ? 'return' : message.kind;
         group.appendChild(badge);
@@ -1475,23 +1577,21 @@ ${webviewMessageTypesJs}
           const routeLabel = svgEl('text', { class: 'message-route label', x: labelX, y: y - 28, 'text-anchor': same ? 'start' : 'middle', 'font-size': 9 });
           routeLabel.textContent = sequenceDirectionLabel(message.kind, from.label, to.label);
           group.appendChild(routeLabel);
-          const label = svgEl('text', { class: 'label', x: labelX, y: y - 10, 'text-anchor': same ? 'start' : 'middle', 'font-size': 12, 'font-weight': 650, fill: '#e7edf6' });
-          label.setAttribute('class', 'label message-label');
+          const label = svgEl('text', { class: 'label message-label seq-participant-name', x: labelX, y: y - 10, 'text-anchor': same ? 'start' : 'middle', 'font-size': 12, 'font-weight': 650 });
           label.textContent = trimLabel(message.label, same ? 34 : 48);
-          const loc = svgEl('text', { x: labelX, y: y + 18, 'text-anchor': same ? 'start' : 'middle', 'font-size': 10, fill: '#9aa6b8' });
+          const loc = svgEl('text', { class: 'message-meta seq-loc', x: labelX, y: y + 18, 'text-anchor': same ? 'start' : 'middle', 'font-size': 10 });
           const endpointHint = endpointMeta === 'return' ? ' | return' : '';
-          loc.setAttribute('class', 'message-meta');
           loc.textContent = message.fileLine + (endpointHint ? endpointHint : '');
           group.appendChild(label);
           group.appendChild(loc);
         }
         if (state.showLabels && message.fileLine) {
           const confidenceLine = svgEl('text', {
+            class: 'seq-confidence',
             x: arrowX,
             y: y + 34,
             'text-anchor': same ? 'start' : 'middle',
             'font-size': 9,
-            fill: '#6d7787',
           });
           confidenceLine.textContent = source?.confidence !== undefined
             ? 'confidence ' + Math.round(source.confidence * 100) + '%'
@@ -1532,12 +1632,12 @@ ${webviewMessageTypesJs}
       sequenceSvg.style.width = Math.round(width * state.sequenceZoom) + 'px';
       sequenceSvg.style.height = Math.round(height * state.sequenceZoom) + 'px';
       sequenceSvg.innerHTML = '';
-      const panel = svgEl('rect', { x: 32, y: 32, width: Math.min(540, width - 64), height: 154, rx: 10, fill: '#151923', stroke: '#2a3343' });
-      const title = svgEl('text', { x: 58, y: 78, 'font-size': 18, 'font-weight': 760, fill: '#e7edf6' });
+      const panel = svgEl('rect', { class: 'seq-participant-box', x: 32, y: 32, width: Math.min(540, width - 64), height: 154, rx: 10 });
+      const title = svgEl('text', { class: 'seq-participant-name', x: 58, y: 78, 'font-size': 18, 'font-weight': 760 });
       title.textContent = 'No endpoint sequence for this target';
-      const line1 = svgEl('text', { x: 58, y: 112, 'font-size': 13, fill: '#9aa6b8' });
+      const line1 = svgEl('text', { class: 'seq-participant-role', x: 58, y: 112, 'font-size': 13 });
       line1.textContent = 'This mode has graph and reference evidence, but no API handler flow.';
-      const line2 = svgEl('text', { x: 58, y: 140, 'font-size': 13, fill: '#9aa6b8' });
+      const line2 = svgEl('text', { class: 'seq-participant-role', x: 58, y: 140, 'font-size': 13 });
       line2.textContent = 'Open References or Graph to inspect impact details.';
       sequenceSvg.appendChild(panel);
       sequenceSvg.appendChild(title);
@@ -1684,6 +1784,29 @@ ${webviewMessageTypesJs}
         stack.set(step.depth, current);
       });
       return { participants: [...participants.values()], messages };
+    }
+
+    function sequenceFragments(flow, messageRowByStepId) {
+      const steps = flow.steps || [];
+      const frames = [];
+      steps.forEach((step, si) => {
+        if (step.kind !== 'branch' && step.kind !== 'loop' && step.kind !== 'exception') return;
+        let endSi = si;
+        for (let j = si + 1; j < steps.length; j++) {
+          if (steps[j].depth > step.depth) { endSi = j; } else { break; }
+        }
+        const startRow = messageRowByStepId.get(step.id);
+        const endRow = messageRowByStepId.get(steps[endSi].id);
+        if (startRow === undefined || endRow === undefined) return;
+        frames.push({
+          kind: step.kind,
+          label: String(step.label || '').replace(/\\s+/g, ' ').trim(),
+          startRow,
+          endRow: Math.max(startRow, endRow),
+          depth: step.depth || 0,
+        });
+      });
+      return frames.sort((a, b) => a.depth - b.depth);
     }
 
     function sequenceColor(kind) {
@@ -2004,6 +2127,76 @@ ${webviewMessageTypesJs}
       }
     }
 
+    const EXPORT_VAR_NAMES = ['--bg','--panel','--panel-2','--panel-3','--text','--muted','--subtle','--border','--border-strong','--target','--symbol','--method','--file','--test','--endpoint','--callback','--annotation','--edge','--selected','--danger'];
+
+    function serializeSvgElement(svg) {
+      const clone = svg.cloneNode(true);
+      let width = Number(svg.dataset.baseWidth) || svg.clientWidth || 0;
+      let height = Number(svg.dataset.baseHeight) || svg.clientHeight || 0;
+      const viewBox = svg.getAttribute('viewBox');
+      if ((!width || !height) && viewBox) {
+        const parts = viewBox.split(/\\s+/).map(Number);
+        if (parts.length === 4) { width = width || parts[2]; height = height || parts[3]; }
+      }
+      width = width || 960;
+      height = height || 600;
+      clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+      clone.setAttribute('width', String(width));
+      clone.setAttribute('height', String(height));
+      clone.removeAttribute('style');
+      const computed = getComputedStyle(document.documentElement);
+      const resolvedVars = EXPORT_VAR_NAMES
+        .map(name => name + ':' + (computed.getPropertyValue(name).trim() || '#888') + ';')
+        .join('');
+      const docStyle = Array.from(document.querySelectorAll('style')).map(node => node.textContent || '').join('\\n');
+      const style = document.createElementNS('http://www.w3.org/2000/svg', 'style');
+      style.textContent = docStyle + '\\nsvg{background:var(--panel-3);}\\n:root{' + resolvedVars + '}';
+      clone.insertBefore(style, clone.firstChild);
+      return { markup: '<?xml version="1.0" encoding="UTF-8"?>\\n' + new XMLSerializer().serializeToString(clone), width, height };
+    }
+
+    function downloadBlob(blob, filename) {
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+    }
+
+    function exportSvgFile(svg, filename) {
+      const { markup } = serializeSvgElement(svg);
+      downloadBlob(new Blob([markup], { type: 'image/svg+xml;charset=utf-8' }), filename);
+    }
+
+    function exportPngFile(svg, filename) {
+      const { markup, width, height } = serializeSvgElement(svg);
+      const url = URL.createObjectURL(new Blob([markup], { type: 'image/svg+xml;charset=utf-8' }));
+      const image = new Image();
+      image.onload = () => {
+        const scale = 2;
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(width * scale));
+        canvas.height = Math.max(1, Math.round(height * scale));
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.scale(scale, scale);
+          ctx.drawImage(image, 0, 0, width, height);
+          canvas.toBlob(blob => { if (blob) downloadBlob(blob, filename); }, 'image/png');
+        }
+        URL.revokeObjectURL(url);
+      };
+      image.onerror = () => URL.revokeObjectURL(url);
+      image.src = url;
+    }
+
+    function exportFileStem(suffix) {
+      const target = String(graph.metadata.target || 'impact').replace(/[^A-Za-z0-9_.-]+/g, '-').replace(/^-+|-+$/g, '') || 'impact';
+      return 'ext-graph-' + target + '-' + suffix;
+    }
+
     async function runTestCommand(command) {
       if (sendWebviewMessage({ type: WEBVIEW_MESSAGE_TYPES.runTestCommand, command })) {
         return true;
@@ -2076,17 +2269,39 @@ ${webviewNormalizedCommandsJs}
       }
 
       graphSvg.classList.toggle('dense', !state.graphLabels);
+      bindGraphInteractions();
       const display = rawGraphDisplayModel();
       document.getElementById('graphMeta').textContent =
         display.nodes.length + ' of ' + graph.nodes.length + ' nodes, ' +
-        display.edges.length + ' of ' + graph.edges.length + ' edges | raw';
-      const positions = graphLayout(width, height, display.nodes);
+        display.edges.length + ' of ' + graph.edges.length + ' edges | raw | drag nodes, Ctrl+scroll to zoom';
+      const positions = graphLayout(width, height, display.nodes, display.edges);
+      positions.forEach(item => {
+        const override = state.graphNodePos[item.node.id];
+        if (override) { item.x = override.x; item.y = override.y; }
+      });
+      const viewport = svgEl('g', {
+        class: 'graph-viewport',
+        transform: 'translate(' + state.graphView.tx + ',' + state.graphView.ty + ') scale(' + state.graphView.scale + ')'
+      });
+      graphSvg.appendChild(viewport);
+
+      const neighbors = new Set();
+      if (state.graphHoverId) {
+        neighbors.add(state.graphHoverId);
+        display.edges.forEach(edge => {
+          if (edge.from === state.graphHoverId) neighbors.add(edge.to);
+          if (edge.to === state.graphHoverId) neighbors.add(edge.from);
+        });
+      }
+      graphSvg.classList.toggle('focus-mode', Boolean(state.graphHoverId));
+
       display.edges.forEach(edge => {
         const from = positions.get(edge.from);
         const to = positions.get(edge.to);
         if (!from || !to) return;
+        const focused = !state.graphHoverId || (neighbors.has(edge.from) && neighbors.has(edge.to));
         const line = svgEl('line', {
-          class: 'edge ' + edge.kind + (state.selectedId === edge.id || state.selectedId === edge.meta?.evidenceId ? ' selected' : ''),
+          class: 'edge ' + edge.kind + (state.selectedId === edge.id || state.selectedId === edge.meta?.evidenceId ? ' selected' : '') + (focused ? ' focus-match' : ''),
           x1: from.x,
           y1: from.y,
           x2: to.x,
@@ -2094,11 +2309,12 @@ ${webviewNormalizedCommandsJs}
           'data-edge-id': edge.id
         });
         line.onclick = () => selectEdge(edge);
-        graphSvg.appendChild(line);
+        viewport.appendChild(line);
       });
       positions.forEach(item => {
         const selected = state.selectedId === item.node.id;
-        const group = svgEl('g', { class: 'node' + (selected ? ' selected' : ''), 'data-node-id': item.node.id });
+        const focused = !state.graphHoverId || neighbors.has(item.node.id);
+        const group = svgEl('g', { class: 'node' + (selected ? ' selected' : '') + (focused ? ' focus-match' : ''), 'data-node-id': item.node.id });
         const circle = svgEl('circle', {
           cx: item.x,
           cy: item.y,
@@ -2111,9 +2327,86 @@ ${webviewNormalizedCommandsJs}
           text.textContent = trimLabel(item.node.label, 28);
           group.appendChild(text);
         }
-        group.onclick = () => selectNode(item.node);
-        graphSvg.appendChild(group);
+        group.addEventListener('pointerdown', event => startGraphNodeDrag(event, item, positions));
+        group.addEventListener('mouseenter', () => { state.graphHoverId = item.node.id; drawGraph(); });
+        group.addEventListener('mouseleave', () => { if (state.graphHoverId === item.node.id) { state.graphHoverId = null; drawGraph(); } });
+        group.onclick = () => { if (!graphInteraction.dragMoved) selectNode(item.node); };
+        viewport.appendChild(group);
       });
+    }
+
+    function bindGraphInteractions() {
+      if (graphInteraction.bound) return;
+      graphInteraction.bound = true;
+      graphSvg.addEventListener('wheel', event => {
+        event.preventDefault();
+        const rect = graphSvg.getBoundingClientRect();
+        const px = event.clientX - rect.left;
+        const py = event.clientY - rect.top;
+        const factor = event.deltaY < 0 ? 1.12 : 1 / 1.12;
+        const next = Math.max(0.3, Math.min(3, state.graphView.scale * factor));
+        const ratio = next / state.graphView.scale;
+        state.graphView.tx = px - (px - state.graphView.tx) * ratio;
+        state.graphView.ty = py - (py - state.graphView.ty) * ratio;
+        state.graphView.scale = next;
+        drawGraph();
+      }, { passive: false });
+      graphSvg.addEventListener('pointerdown', event => {
+        if (graphInteraction.dragNodeId) return;
+        if (event.target && event.target.closest && event.target.closest('.node, .map-node')) return;
+        graphInteraction.panning = true;
+        graphInteraction.pointerId = event.pointerId;
+        graphInteraction.startX = event.clientX;
+        graphInteraction.startY = event.clientY;
+        graphInteraction.baseTx = state.graphView.tx;
+        graphInteraction.baseTy = state.graphView.ty;
+      });
+      graphSvg.addEventListener('pointermove', event => {
+        if (graphInteraction.dragNodeId) { moveGraphNodeDrag(event); return; }
+        if (!graphInteraction.panning || graphInteraction.pointerId !== event.pointerId) return;
+        state.graphView.tx = graphInteraction.baseTx + (event.clientX - graphInteraction.startX);
+        state.graphView.ty = graphInteraction.baseTy + (event.clientY - graphInteraction.startY);
+        applyGraphViewport();
+      });
+      const endPan = () => { graphInteraction.panning = false; graphInteraction.pointerId = null; };
+      graphSvg.addEventListener('pointerup', event => { endGraphNodeDrag(event); endPan(); });
+      graphSvg.addEventListener('pointerleave', () => { endPan(); });
+    }
+
+    function applyGraphViewport() {
+      const viewport = graphSvg.querySelector('.graph-viewport');
+      if (viewport) {
+        viewport.setAttribute('transform', 'translate(' + state.graphView.tx + ',' + state.graphView.ty + ') scale(' + state.graphView.scale + ')');
+      }
+    }
+
+    function startGraphNodeDrag(event, item, positions) {
+      event.stopPropagation();
+      graphInteraction.dragNodeId = item.node.id;
+      graphInteraction.dragMoved = false;
+      graphInteraction.positions = positions;
+      graphInteraction.startX = event.clientX;
+      graphInteraction.startY = event.clientY;
+      graphInteraction.nodeBaseX = item.x;
+      graphInteraction.nodeBaseY = item.y;
+      if (graphSvg.setPointerCapture) { try { graphSvg.setPointerCapture(event.pointerId); } catch {} }
+    }
+
+    function moveGraphNodeDrag(event) {
+      const id = graphInteraction.dragNodeId;
+      if (!id) return;
+      const dx = (event.clientX - graphInteraction.startX) / state.graphView.scale;
+      const dy = (event.clientY - graphInteraction.startY) / state.graphView.scale;
+      if (Math.abs(dx) > 1 || Math.abs(dy) > 1) graphInteraction.dragMoved = true;
+      state.graphNodePos[id] = { x: graphInteraction.nodeBaseX + dx, y: graphInteraction.nodeBaseY + dy };
+      drawGraph();
+    }
+
+    function endGraphNodeDrag(event) {
+      if (!graphInteraction.dragNodeId) return;
+      if (graphSvg.releasePointerCapture && event.pointerId !== undefined) { try { graphSvg.releasePointerCapture(event.pointerId); } catch {} }
+      graphInteraction.dragNodeId = null;
+      setTimeout(() => { graphInteraction.dragMoved = false; }, 0);
     }
 
     function rawGraphDisplayModel() {
@@ -2337,20 +2630,74 @@ ${webviewNormalizedCommandsJs}
       return { id: 'map:empty:' + key, kind: 'symbol', title: 'None', subtitle: '', count: 0, color: '#697586' };
     }
 
-    function graphLayout(width, height, nodes) {
-      const center = { x: width / 2, y: height / 2 };
-      const byId = new Map(nodes.map((node, index) => [node.id, { node, index, x: center.x, y: center.y }]));
-      const groups = ['target', 'endpoint', 'method', 'callback', 'annotation', 'symbol', 'file', 'test'];
-      groups.forEach(kind => {
-        const items = [...byId.values()].filter(item => item.node.kind === kind);
-        const radius = kind === 'target' ? 0 : 110 + groups.indexOf(kind) * 54;
-        items.forEach((item, i) => {
-          const angle = (Math.PI * 2 * i / Math.max(items.length, 1)) + groups.indexOf(kind) * .42;
-          item.x = center.x + Math.cos(angle) * Math.min(radius, width * .44);
-          item.y = center.y + Math.sin(angle) * Math.min(radius, height * .40);
+    function graphLayout(width, height, nodes, edges = []) {
+      const byId = new Map(nodes.map((node, index) => [node.id, { node, index, x: width / 2, y: height / 2, layer: -1 }]));
+      if (!nodes.length) return byId;
+      // Build undirected adjacency for BFS layering.
+      const adjacency = new Map(nodes.map(node => [node.id, []]));
+      edges.forEach(edge => {
+        if (adjacency.has(edge.from) && adjacency.has(edge.to)) {
+          adjacency.get(edge.from).push(edge.to);
+          adjacency.get(edge.to).push(edge.from);
+        }
+      });
+      // Root: the target node, else the highest-degree node.
+      let root = nodes.find(node => node.kind === 'target');
+      if (!root) {
+        root = nodes.reduce((best, node) =>
+          (adjacency.get(node.id)?.length || 0) > (adjacency.get(best.id)?.length || 0) ? node : best, nodes[0]);
+      }
+      // BFS distance = layer.
+      const queue = [root.id];
+      byId.get(root.id).layer = 0;
+      while (queue.length) {
+        const id = queue.shift();
+        const layer = byId.get(id).layer;
+        (adjacency.get(id) || []).forEach(next => {
+          const item = byId.get(next);
+          if (item && item.layer === -1) { item.layer = layer + 1; queue.push(next); }
+        });
+      }
+      // Disconnected nodes go to a trailing layer grouped by kind.
+      let maxLayer = 0;
+      byId.forEach(item => { if (item.layer >= 0) maxLayer = Math.max(maxLayer, item.layer); });
+      byId.forEach(item => { if (item.layer === -1) item.layer = maxLayer + 1; });
+
+      const layers = new Map();
+      byId.forEach(item => {
+        if (!layers.has(item.layer)) layers.set(item.layer, []);
+        layers.get(item.layer).push(item);
+      });
+      const layerKeys = [...layers.keys()].sort((a, b) => a - b);
+      const marginX = 70;
+      const usableWidth = Math.max(360, width - marginX * 2);
+      const columnGap = layerKeys.length > 1 ? usableWidth / (layerKeys.length - 1) : 0;
+      layerKeys.forEach((key, columnIndex) => {
+        const items = layers.get(key);
+        // Order within a column by neighbor barycenter against the previous column for fewer crossings.
+        items.sort((a, b) => barycenter(a, byId, adjacency) - barycenter(b, byId, adjacency) || String(a.node.kind).localeCompare(String(b.node.kind)));
+        const x = layerKeys.length === 1 ? width / 2 : marginX + columnIndex * columnGap;
+        const rowGap = Math.min(64, Math.max(26, (height - 80) / Math.max(items.length, 1)));
+        const colHeight = (items.length - 1) * rowGap;
+        const startY = height / 2 - colHeight / 2;
+        items.forEach((item, rowIndex) => {
+          item.x = x;
+          item.y = startY + rowIndex * rowGap;
         });
       });
       return byId;
+    }
+
+    function barycenter(item, byId, adjacency) {
+      const neighbors = adjacency.get(item.node.id) || [];
+      if (!neighbors.length) return item.index;
+      let sum = 0;
+      let count = 0;
+      neighbors.forEach(id => {
+        const other = byId.get(id);
+        if (other) { sum += other.y; count++; }
+      });
+      return count ? sum / count : item.index;
     }
 
     function selectFlowStep(step) {
@@ -2425,6 +2772,12 @@ ${webviewNormalizedCommandsJs}
       sequenceScroller.addEventListener('pointerup', endSequencePan);
       sequenceScroller.addEventListener('pointercancel', endSequencePan);
       sequenceScroller.addEventListener('pointerleave', endSequencePan);
+      sequenceScroller.addEventListener('wheel', event => {
+        if (!(event.ctrlKey || event.metaKey)) return;
+        event.preventDefault();
+        const direction = event.deltaY < 0 ? 1 : -1;
+        setSequenceZoom(state.sequenceZoom + direction * 0.12);
+      }, { passive: false });
     }
 
     function startSequencePan(event) {

@@ -148,6 +148,25 @@ class UserListingPage {}
     expect(html).toContain('References are filtered by this selection.');
     expect(html).toContain('Mermaid sequence');
     expect(html).toContain('sequenceDiagram');
+
+    // Upgraded rendering: theme-aware, UML combined fragments, activation bars,
+    // wheel-zoom, layered graph layout, pan/zoom/drag, hover focus, exports, collapsible panels.
+    expect(html).toContain('color-scheme: light dark');
+    expect(html).toContain('function sequenceFragments');
+    expect(html).toContain('seq-fragment');
+    expect(html).toContain('seq-activation');
+    expect(html).toContain('low-confidence');
+    expect(html).toContain('seq-participant-box');
+    expect(html).toContain('ctrlKey || event.metaKey');
+    expect(html).toContain('function bindGraphInteractions');
+    expect(html).toContain('function barycenter');
+    expect(html).toContain('graph-viewport');
+    expect(html).toContain('focus-mode');
+    expect(html).toContain('exportSequenceSvg');
+    expect(html).toContain('exportGraphPng');
+    expect(html).toContain('function exportPngFile');
+    expect(html).toContain('toggleNavPanel');
+    expect(html).toContain('toggleInspectorPanel');
   });
 
   it('uses sendWebviewMessage for extension-bound webview actions', () => {
