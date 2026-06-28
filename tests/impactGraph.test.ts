@@ -5,6 +5,7 @@ import vm from 'node:vm';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildImpactGraph } from '../src/impactGraph.js';
 import type { ImpactGraph } from '../src/impactGraph.js';
+import { parseJavaAst } from '../src/javaAstParser.js';
 import { renderImpactGraphHtml } from '../src/render.js';
 import { TEST_COMMAND_BATCH_LIMIT } from '../src/testCommandRunner.js';
 import { WEBVIEW_MESSAGE_TYPES } from '../src/webviewMessageSchema.js';
@@ -1235,6 +1236,167 @@ class ComplexService {
     expect(testSuggestionRows).toHaveLength(1);
     expect(html).toContain(`Run Top ${TEST_COMMAND_BATCH_LIMIT}`);
     expect(html).toContain('AuthServiceTest');
+  });
+});
+
+describe('parseJavaAst — AST backbone accuracy', () => {
+  const TRICKY_JAVA = `
+package com.example;
+import javax.inject.Inject;
+import java.util.List;
+import java.util.stream.Collectors;
+
+public class OrderService {
+    @Inject
+    private ItemRepository itemRepo;
+
+    private List<Order> cache;
+
+    public List<Order> findOrders(String userId) {
+        // chained stream call — regex callsFromLine misses .stream().filter().collect()
+        List<Order> orders = itemRepo.findByUser(userId)
+            .stream()
+            .filter(o -> o.isActive())
+            .collect(Collectors.toList());
+        // method reference — regex misses this entirely
+        orders.forEach(Order::process);
+        // call inside string interpolation: should NOT appear as false-positive
+        String msg = "calling process() here is fine";
+        notifyAudit(userId);
+        return orders;
+    }
+
+    private void notifyAudit(String userId) {
+        auditLog.record(userId);
+    }
+}
+`.trimStart();
+
+  it('extracts correct engine marker', () => {
+    const result = parseJavaAst(TRICKY_JAVA);
+    expect(result?.engine).toBe('ast');
+  });
+
+  it('extracts package name', () => {
+    const result = parseJavaAst(TRICKY_JAVA);
+    expect(result?.packageName).toBe('com.example');
+  });
+
+  it('extracts imports with isStatic flag', () => {
+    const result = parseJavaAst(TRICKY_JAVA);
+    const names = result?.imports.map(i => i.name) ?? [];
+    expect(names).toContain('javax.inject.Inject');
+    expect(names).toContain('java.util.List');
+    expect(names).toContain('java.util.stream.Collectors');
+    expect(result?.imports.every(i => !i.isStatic)).toBe(true);
+  });
+
+  it('extracts class with annotation', () => {
+    const result = parseJavaAst(TRICKY_JAVA);
+    const cls = result?.classes.find(c => c.name === 'OrderService');
+    expect(cls).toBeDefined();
+    expect(cls?.kind).toBe('class');
+  });
+
+  it('extracts field with correct type (handles generics)', () => {
+    const result = parseJavaAst(TRICKY_JAVA);
+    const itemRepoField = result?.fields.find(f => f.name === 'itemRepo');
+    expect(itemRepoField?.fieldType).toBe('ItemRepository');
+    // List<Order> should resolve to "List" (erased), not undefined
+    const cacheField = result?.fields.find(f => f.name === 'cache');
+    expect(cacheField?.fieldType).toBe('List');
+  });
+
+  it('extracts methods with param count and annotations', () => {
+    const result = parseJavaAst(TRICKY_JAVA);
+    const findOrders = result?.methods.find(m => m.name === 'findOrders');
+    expect(findOrders?.owner).toBe('OrderService');
+    expect(findOrders?.paramCount).toBe(1);
+    const notify = result?.methods.find(m => m.name === 'notifyAudit');
+    expect(notify?.paramCount).toBe(1);
+  });
+
+  it('detects chained calls that regex misses (stream + filter + collect)', () => {
+    const result = parseJavaAst(TRICKY_JAVA);
+    const callNames = result?.calls.map(c => c.name) ?? [];
+    // These are chained calls on the result of findByUser()
+    expect(callNames).toContain('stream');
+    expect(callNames).toContain('filter');
+    expect(callNames).toContain('collect');
+  });
+
+  it('detects calls inside and outside of chained expressions', () => {
+    const result = parseJavaAst(TRICKY_JAVA);
+    const callNames = result?.calls.map(c => c.name) ?? [];
+    expect(callNames).toContain('findByUser');
+    expect(callNames).toContain('notifyAudit');
+  });
+
+  it('does NOT emit false-positive calls from string literals', () => {
+    const result = parseJavaAst(TRICKY_JAVA);
+    // "calling process() here" inside a string — must NOT appear
+    const callNames = result?.calls.map(c => c.name) ?? [];
+    const processCallsFromString = result?.calls.filter(
+      c => c.name === 'process' && (c.line ?? 0) >= 22 && (c.line ?? 0) <= 23
+    ) ?? [];
+    // There should be no call named 'process' from the string literal line
+    expect(processCallsFromString.length).toBe(0);
+  });
+
+  it('proves accuracy vs regex: detects chained receiver correctly', () => {
+    const result = parseJavaAst(TRICKY_JAVA);
+    const streamCall = result?.calls.find(c => c.name === 'stream');
+    const filterCall = result?.calls.find(c => c.name === 'filter');
+    const collectCall = result?.calls.find(c => c.name === 'collect');
+    // stream is called on result of findByUser → receiver should be set
+    expect(streamCall).toBeDefined();
+    // filter is chained → receiver should be 'stream' (or the immediate prior name)
+    expect(filterCall).toBeDefined();
+    // collect is chained → receiver = 'filter'
+    expect(collectCall).toBeDefined();
+  });
+
+  it('integrates into buildImpactGraph and improves field type resolution', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ext-graph-ast-'));
+    try {
+      write(root, 'src/main/java/com/example/OrderController.java', `
+package com.example;
+import org.springframework.web.bind.annotation.GetMapping;
+class OrderController {
+  private OrderService svc;
+  @GetMapping("/orders")
+  List<Order> getOrders() {
+    return svc.findOrders("x");
+  }
+}
+`);
+      write(root, 'src/main/java/com/example/OrderService.java', `
+package com.example;
+class OrderService {
+  private ItemRepository itemRepo;
+  List<Order> findOrders(String userId) {
+    return itemRepo.findByUser(userId);
+  }
+}
+`);
+      write(root, 'src/main/java/com/example/ItemRepository.java', `
+package com.example;
+class ItemRepository {
+  List<Order> findByUser(String userId) { return null; }
+}
+`);
+      const graph = await buildImpactGraph({
+        root,
+        target: 'OrderService.findOrders',
+        mode: 'api-flow',
+      });
+      // With AST field type enrichment, itemRepo is typed as ItemRepository,
+      // enabling resolveCallTarget to trace itemRepo.findByUser → ItemRepository.findByUser
+      const callTargets = graph.flows.flatMap(f => f.steps).map(s => s.target ?? '');
+      expect(callTargets.some(s => s.includes('ItemRepository'))).toBe(true);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

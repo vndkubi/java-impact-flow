@@ -2,7 +2,7 @@
   "name": "java-impact-flow",
   "displayName": "Java Impact Flow",
   "description": "Visualize Java field, method, callback, API-flow impact, and suggested tests in VS Code.",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "publisher": "vndkubi",
   "type": "module",
   "main": "./dist/extension.js",
@@ -23,7 +23,7 @@
   "scripts": {
     "vscode:prepublish": "npm run build",
     "prepack": "npm run build",
-    "build": "tsc -p .",
+    "build": "tsc -p . && npx esbuild dist/javaAstParser.js --bundle --platform=node --format=esm --outfile=dist/javaAstParser.js --allow-overwrite --minify",
     "lint": "tsc --noEmit -p .",
     "demo": "node dist/cli.js",
     "smoke:vsix": "npm run build --silent && node dist/vsixSmokeTest.js",
@@ -237,5 +237,8 @@
     "@types/vscode": "^1.90.0",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0"
+  },
+  "dependencies": {
+    "java-parser": "^3.0.1"
   }
 }

@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { parseJavaAst, type AstCall } from './javaAstParser.js';
 
 export type ImpactMode = 'references' | 'call' | 'api-flow' | 'patch-impact';
 
@@ -153,6 +154,7 @@ interface JavaFileFacts {
   endpoints: JavaEndpoint[];
   callbacks: JavaCallback[];
   annotations: JavaAnnotation[];
+  astCallsByLine: Map<number, AstCall[]>;
 }
 
 interface JavaImport {
@@ -577,7 +579,25 @@ function parseJavaFile(root: string, absPath: string): JavaFileFacts {
   }
   callbacks.push(...scanCallbacks(file, lines, methods));
 
-  return { file, absPath, isTest, packageName, imports, lines, classes, methods, fields, endpoints, callbacks, annotations };
+  // AST enrichment: parse whole file for accurate calls and field types
+  const astCallsByLine = new Map<number, AstCall[]>();
+  const astResult = parseJavaAst(content);
+  if (astResult) {
+    for (const call of astResult.calls) {
+      const ln = call.line ?? 0;
+      if (!astCallsByLine.has(ln)) astCallsByLine.set(ln, []);
+      astCallsByLine.get(ln)!.push(call);
+    }
+    // Fill in missing field typeName from AST (AST handles generics and complex types correctly)
+    for (const astField of astResult.fields) {
+      const existing = fields.find(f => f.name === astField.name && f.owner === astField.owner);
+      if (existing && !existing.typeName && astField.fieldType) {
+        existing.typeName = astField.fieldType;
+      }
+    }
+  }
+
+  return { file, absPath, isTest, packageName, imports, lines, classes, methods, fields, endpoints, callbacks, annotations, astCallsByLine };
 }
 
 function scanSpringEndpoints(
@@ -1170,7 +1190,7 @@ function resolvedMethodTargetsForMethod(
       if (resolved) targets.add(resolved.fqName);
     }
 
-    for (const call of callsFromLine(raw).slice(0, 8)) {
+    for (const call of mergedCallsForLine(fact.astCallsByLine, lineNo, raw)) {
       const resolved = resolveCallTarget(methodIndex, call, method, receiverTypes);
       if (resolved) targets.add(resolved.fqName);
     }
@@ -1839,7 +1859,7 @@ function traceMethodFlow(input: {
       }
       continue;
     }
-    for (const call of callsFromLine(raw).slice(0, 8)) {
+    for (const call of mergedCallsForLine(fact.astCallsByLine, lineNo, raw)) {
       const resolved = resolveCallTarget(input.methodIndex, call, input.method, receiverTypes);
       input.steps.push({
         id: `flow-step:${input.steps.length + 1}`,
@@ -2033,6 +2053,26 @@ function callsFromLine(raw: string): Array<{ receiver?: string; name: string; ar
     calls.push({ receiver: match[1], name, argCount: countCallArguments(stripped, openIndex) });
   }
   return calls;
+}
+
+function mergedCallsForLine(
+  astCallsByLine: Map<number, AstCall[]>,
+  lineNo: number,
+  raw: string,
+): Array<{ receiver?: string; name: string; argCount?: number }> {
+  const regexCalls = callsFromLine(raw);
+  const astCalls = astCallsByLine.get(lineNo) ?? [];
+  if (!astCalls.length) return regexCalls.slice(0, 8);
+  // Merge: start with regex calls, add any AST calls with names not already covered
+  const seen = new Set(regexCalls.map(c => c.name));
+  const merged: Array<{ receiver?: string; name: string; argCount?: number }> = [...regexCalls];
+  for (const ac of astCalls) {
+    if (!seen.has(ac.name)) {
+      merged.push({ receiver: ac.receiver, name: ac.name, argCount: ac.argCount });
+      seen.add(ac.name);
+    }
+  }
+  return merged.slice(0, 12);
 }
 
 function countCallArguments(value: string, openIndex: number): number | undefined {

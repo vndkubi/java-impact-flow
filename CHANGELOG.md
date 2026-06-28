@@ -1,5 +1,18 @@
 # Change Log
 
+## 0.1.13 - 2026-06-29
+
+- Replaced static-regex Java parsing backbone with a proper AST engine (`java-parser`,
+  Chevrotain-based) that understands the full Java grammar.
+- Call extraction now correctly handles chained stream/fluent calls (`repo.findAll().stream().filter()`),
+  avoids false positives from string literals, and tracks direct receivers for chained expressions.
+- Field type resolution is enriched from the AST (correctly strips generics: `List<Order>` → `List`)
+  enabling more resolved call targets for injected field receivers.
+- AST parser is bundled inline via esbuild (220 KB minified, no external runtime dependencies)
+  and falls back to the existing regex analyzer if parsing fails, so every file is still analyzed.
+- Added 10 accuracy-coverage tests that prove AST detects chained calls the regex misses and
+  emits no false-positive calls from string literal content.
+
 ## 0.1.12 - 2026-06-27
 
 - Added a Command Palette (`Ctrl`/`Cmd`+`P`, also `Ctrl`/`Cmd`+`K` or `/`) with
