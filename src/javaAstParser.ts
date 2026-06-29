@@ -11,6 +11,13 @@ export interface AstField {
   name: string;
   fieldType?: string;
   owner?: string;
+  line?: number;
+}
+
+export interface AstLocalVar {
+  name: string;
+  type: string;
+  line?: number;
 }
 
 export interface AstMethod {
@@ -39,6 +46,7 @@ export interface AstParseResult {
   methods: AstMethod[];
   fields: AstField[];
   calls: AstCall[];
+  localVars: AstLocalVar[];
   engine: 'ast';
 }
 
@@ -173,6 +181,46 @@ export function extractCallsFromPrimary(primary: CstNode): AstCall[] {
   return calls;
 }
 
+// --- Local variable helpers ---
+
+function extractNewExpressionType(decl: CstNode): string | undefined {
+  // Depth-first search for unqualifiedClassInstanceCreationExpression anywhere in decl
+  function findNew(node: CstNode | IToken | null | undefined): string | undefined {
+    if (!node || isToken(node)) return undefined;
+    const n = node as CstNode;
+    if (n.name === 'unqualifiedClassInstanceCreationExpression') {
+      const classType = (n.children.classOrInterfaceTypeToInstantiate as CstNode[] | undefined)?.[0];
+      return (classType?.children?.Identifier as IToken[] | undefined)?.[0]?.image;
+    }
+    for (const kids of Object.values(n.children ?? {})) {
+      for (const kid of kids as Array<CstNode | IToken>) {
+        const found = findNew(kid);
+        if (found) return found;
+      }
+    }
+    return undefined;
+  }
+  return findNew(decl);
+}
+
+function unannTypeFirstId(unann: CstNode | undefined): string | undefined {
+  const refType = (unann?.children?.unannReferenceType as CstNode[] | undefined)?.[0];
+  const classType = (refType?.children?.unannClassOrInterfaceType as CstNode[] | undefined)?.[0];
+  const concreteClass = (classType?.children?.unannClassType as CstNode[] | undefined)?.[0];
+  return (concreteClass?.children?.Identifier as IToken[] | undefined)?.[0]?.image;
+}
+
+function hasVarToken(node: CstNode | IToken | null | undefined): boolean {
+  if (!node) return false;
+  if (isToken(node)) return node.tokenType?.name === 'Var';
+  for (const kids of Object.values((node as CstNode).children ?? {})) {
+    for (const kid of kids as Array<CstNode | IToken>) {
+      if (hasVarToken(kid)) return true;
+    }
+  }
+  return false;
+}
+
 // --- Annotation name extraction ---
 
 function annotationName(annNode: CstNode): string {
@@ -291,7 +339,24 @@ function walkNode(node: unknown, state: WalkState): void {
       for (const decl of (varList?.children?.variableDeclarator as CstNode[] | undefined) ?? []) {
         const varId = (decl.children?.variableDeclaratorId as CstNode[] | undefined)?.[0];
         const name = (varId?.children?.Identifier as IToken[] | undefined)?.[0]?.image ?? '';
-        if (name) state.result.fields.push({ name, fieldType, owner });
+        const line = tokenLine(varId);
+        if (name) state.result.fields.push({ name, fieldType, owner, line });
+      }
+      break;
+    }
+
+    case 'localVariableDeclaration': {
+      const localType = (n.children.localVariableType as CstNode[] | undefined)?.[0];
+      const unann = (localType?.children?.unannType as CstNode[] | undefined)?.[0];
+      const isVar = hasVarToken(unann);
+      const explicitType = isVar ? undefined : unannTypeFirstId(unann);
+      const varList = (n.children.variableDeclaratorList as CstNode[] | undefined)?.[0];
+      for (const decl of (varList?.children?.variableDeclarator as CstNode[] | undefined) ?? []) {
+        const varId = (decl.children?.variableDeclaratorId as CstNode[] | undefined)?.[0];
+        const varName = (varId?.children?.Identifier as IToken[] | undefined)?.[0]?.image;
+        const line = tokenLine(varId);
+        const varType = isVar ? extractNewExpressionType(decl) : explicitType;
+        if (varName && varType) state.result.localVars.push({ name: varName, type: varType, line });
       }
       break;
     }
@@ -323,7 +388,7 @@ export function parseJavaAst(content: string): AstParseResult | null {
   try {
     const cst = parse(content) as unknown as CstNode;
     const state: WalkState = {
-      result: { imports: [], classes: [], methods: [], fields: [], calls: [], engine: 'ast' },
+      result: { imports: [], classes: [], methods: [], fields: [], calls: [], localVars: [], engine: 'ast' },
       classStack: [],
     };
     walkNode(cst, state);

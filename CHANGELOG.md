@@ -1,5 +1,22 @@
 # Change Log
 
+## 0.1.14 - 2026-06-29
+
+- **A1 — AST local variable type inference**: `javaAstParser` now extracts all local
+  variable declarations (`localVars`) with their declared types and, for `var` declarations,
+  infers the concrete type from the `new` expression (e.g. `var svc = new OrderServiceImpl()`
+  → type `OrderServiceImpl`). Multi-declarator lines (`Type a = …, b = …`) are handled
+  correctly; `var` without a `new` expression emits no entry (no false inference).
+- **A3 — AST-only field merging**: fields found by the AST that were missed by the
+  line-by-line regex parser (e.g. multi-line declarations) are now added to the field index,
+  enabling receiver type resolution for those fields in flow tracing.
+- **AST field line numbers**: `AstField` now carries an optional `line` property (extracted
+  from the variable declarator token) so AST-only fields can be registered as proper
+  `JavaSymbol` entries with accurate source positions.
+- **8 new tests** across two `describe` blocks proving: explicit type extraction, `var`+`new`
+  inference, generic stripping (`List<Order>` → `List`), multi-declarator extraction, no
+  false-positive for uninferable `var`, and end-to-end CDI/Jakarta EE call resolution.
+
 ## 0.1.13 - 2026-06-29
 
 - Replaced static-regex Java parsing backbone with a proper AST engine (`java-parser`,

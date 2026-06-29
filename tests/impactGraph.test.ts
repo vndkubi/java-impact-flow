@@ -1400,6 +1400,181 @@ class ItemRepository {
   });
 });
 
+describe('parseJavaAst — A1 local variable type extraction', () => {
+  const LOCAL_VAR_JAVA = `
+package com.example;
+
+class CheckoutService {
+    void processOrder(String orderId) {
+        // Explicit type — extracted directly
+        OrderRepository repo = orderContext.getRepository();
+        // var + new expression — inferred from constructor
+        var processor = new ItemProcessorImpl(config);
+        // Generic type — first identifier only (List, not List<Order>)
+        List<Order> orders = repo.findAll();
+        // Multi-declarator on same line — both extracted
+        ItemValidator v1 = null, v2 = new ValidatorImpl();
+        // var without new — no type inferable, must NOT appear
+        var count = orders.size();
+        // Use all locals so they are meaningful
+        processor.process(orders);
+        v1.validate(orderId);
+        v2.validate(orderId);
+    }
+}
+`.trimStart();
+
+  it('extracts explicit local variable type', () => {
+    const result = parseJavaAst(LOCAL_VAR_JAVA);
+    const repo = result?.localVars.find(v => v.name === 'repo');
+    expect(repo?.type).toBe('OrderRepository');
+  });
+
+  it('extracts var type from new expression', () => {
+    const result = parseJavaAst(LOCAL_VAR_JAVA);
+    const processor = result?.localVars.find(v => v.name === 'processor');
+    expect(processor?.type).toBe('ItemProcessorImpl');
+  });
+
+  it('strips generic from local variable type (List<Order> → List)', () => {
+    const result = parseJavaAst(LOCAL_VAR_JAVA);
+    const orders = result?.localVars.find(v => v.name === 'orders');
+    expect(orders?.type).toBe('List');
+  });
+
+  it('extracts all declarators in multi-variable declaration', () => {
+    const result = parseJavaAst(LOCAL_VAR_JAVA);
+    const v1 = result?.localVars.find(v => v.name === 'v1');
+    const v2 = result?.localVars.find(v => v.name === 'v2');
+    expect(v1?.type).toBe('ItemValidator');
+    expect(v2?.type).toBe('ItemValidator');
+  });
+
+  it('does NOT emit entry for var without new (type is not inferrable)', () => {
+    const result = parseJavaAst(LOCAL_VAR_JAVA);
+    const count = result?.localVars.find(v => v.name === 'count');
+    expect(count).toBeUndefined();
+  });
+
+  it('records correct line number for local variable', () => {
+    const result = parseJavaAst(LOCAL_VAR_JAVA);
+    const repo = result?.localVars.find(v => v.name === 'repo');
+    expect(typeof repo?.line).toBe('number');
+    expect((repo?.line ?? 0) > 0).toBe(true);
+  });
+});
+
+describe('buildImpactGraph — A1+A3 CDI local variable and field resolution', () => {
+  it('resolves calls through var-typed local variables in Jakarta EE CDI pattern', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ext-graph-cdi-'));
+    try {
+      write(root, 'src/main/java/com/example/OrderController.java', `
+package com.example;
+import jakarta.ws.rs.GET;
+import jakarta.ws.rs.Path;
+@Path("/api")
+class OrderController {
+  @jakarta.inject.Inject
+  private OrderService orderService;
+  @GET
+  @Path("/orders")
+  public List<Order> getOrders() {
+    return orderService.findOrders();
+  }
+}
+`);
+      write(root, 'src/main/java/com/example/OrderService.java', `
+package com.example;
+import jakarta.enterprise.context.ApplicationScoped;
+@ApplicationScoped
+class OrderService {
+  @jakarta.inject.Inject
+  private ItemRepository itemRepo;
+
+  public List<Order> findOrders() {
+    // var with new — A1: AST infers type from constructor
+    var validator = new OrderValidator();
+    List<Order> orders = itemRepo.findAll();
+    orders = validator.filter(orders);
+    return orders;
+  }
+}
+`);
+      write(root, 'src/main/java/com/example/ItemRepository.java', `
+package com.example;
+class ItemRepository {
+  public List<Order> findAll() { return null; }
+}
+`);
+      write(root, 'src/main/java/com/example/OrderValidator.java', `
+package com.example;
+class OrderValidator {
+  public List<Order> filter(List<Order> orders) { return orders; }
+}
+`);
+      const graph = await buildImpactGraph({
+        root,
+        target: 'OrderService.findOrders',
+        mode: 'api-flow',
+      });
+      const stepTargets = graph.flows.flatMap(f => f.steps).map(s => s.target ?? '');
+      // AST field type enrichment (A3) enables resolving itemRepo → ItemRepository
+      expect(stepTargets.some(t => t.includes('ItemRepository'))).toBe(true);
+      // AST local var extraction (A1) enables resolving validator → OrderValidator
+      expect(stepTargets.some(t => t.includes('OrderValidator'))).toBe(true);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('AST-only field from multi-line declaration is added to field index', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ext-graph-multiline-'));
+    try {
+      write(root, 'src/main/java/com/example/PaymentService.java', `
+package com.example;
+class PaymentService {
+  private
+    BillingRepository
+    billingRepo;
+
+  public void charge(String id) {
+    billingRepo.save(id);
+  }
+}
+`);
+      write(root, 'src/main/java/com/example/BillingRepository.java', `
+package com.example;
+class BillingRepository {
+  public void save(String id) {}
+}
+`);
+      write(root, 'src/main/java/com/example/ApiController.java', `
+package com.example;
+import jakarta.ws.rs.POST;
+import jakarta.ws.rs.Path;
+@Path("/pay")
+class ApiController {
+  private PaymentService paymentService;
+  @POST
+  public void pay(String id) {
+    paymentService.charge(id);
+  }
+}
+`);
+      const graph = await buildImpactGraph({
+        root,
+        target: 'PaymentService.charge',
+        mode: 'api-flow',
+      });
+      // AST adds billingRepo field (missed by line-by-line regex) → BillingRepository resolved
+      const stepTargets = graph.flows.flatMap(f => f.steps).map(s => s.target ?? '');
+      expect(stepTargets.some(t => t.includes('BillingRepository'))).toBe(true);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 function write(root: string, file: string, content: string): void {
   const abs = path.join(root, file);
   fs.mkdirSync(path.dirname(abs), { recursive: true });

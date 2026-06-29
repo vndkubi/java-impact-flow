@@ -155,6 +155,7 @@ interface JavaFileFacts {
   callbacks: JavaCallback[];
   annotations: JavaAnnotation[];
   astCallsByLine: Map<number, AstCall[]>;
+  astLocalVarsByLine: Map<number, Array<{ name: string; type: string }>>;
 }
 
 interface JavaImport {
@@ -579,8 +580,9 @@ function parseJavaFile(root: string, absPath: string): JavaFileFacts {
   }
   callbacks.push(...scanCallbacks(file, lines, methods));
 
-  // AST enrichment: parse whole file for accurate calls and field types
+  // AST enrichment: parse whole file for accurate calls, field types, and local variable types
   const astCallsByLine = new Map<number, AstCall[]>();
+  const astLocalVarsByLine = new Map<number, Array<{ name: string; type: string }>>();
   const astResult = parseJavaAst(content);
   if (astResult) {
     for (const call of astResult.calls) {
@@ -588,16 +590,34 @@ function parseJavaFile(root: string, absPath: string): JavaFileFacts {
       if (!astCallsByLine.has(ln)) astCallsByLine.set(ln, []);
       astCallsByLine.get(ln)!.push(call);
     }
-    // Fill in missing field typeName from AST (AST handles generics and complex types correctly)
+    // Index local variable types by declaration line
+    for (const lv of astResult.localVars) {
+      const ln = lv.line ?? 0;
+      if (!astLocalVarsByLine.has(ln)) astLocalVarsByLine.set(ln, []);
+      astLocalVarsByLine.get(ln)!.push({ name: lv.name, type: lv.type });
+    }
+    // Merge AST fields: update existing field types and add fields missed by regex
     for (const astField of astResult.fields) {
+      if (!astField.name || !astField.fieldType) continue;
       const existing = fields.find(f => f.name === astField.name && f.owner === astField.owner);
-      if (existing && !existing.typeName && astField.fieldType) {
-        existing.typeName = astField.fieldType;
+      if (existing) {
+        if (!existing.typeName) existing.typeName = astField.fieldType;
+      } else if (astField.owner && astField.line) {
+        // AST found a field the line-by-line regex missed (e.g., multi-line declaration)
+        fields.push({
+          kind: 'field',
+          name: astField.name,
+          owner: astField.owner,
+          fqName: qualify(packageName, `${astField.owner}.${astField.name}`),
+          file,
+          line: astField.line,
+          typeName: astField.fieldType,
+        });
       }
     }
   }
 
-  return { file, absPath, isTest, packageName, imports, lines, classes, methods, fields, endpoints, callbacks, annotations, astCallsByLine };
+  return { file, absPath, isTest, packageName, imports, lines, classes, methods, fields, endpoints, callbacks, annotations, astCallsByLine, astLocalVarsByLine };
 }
 
 function scanSpringEndpoints(
@@ -1183,6 +1203,7 @@ function resolvedMethodTargetsForMethod(
     const raw = fact.lines[lineNo - 1] ?? '';
     if (!raw.trim() || lineNo === method.line) continue;
     for (const local of localVariablesFromLine(raw)) receiverTypes.set(local.name, local.typeName);
+    for (const lv of fact.astLocalVarsByLine.get(lineNo) ?? []) receiverTypes.set(lv.name, lv.type);
 
     const callback = callbacksByLine.get(lineNo);
     if (callback) {
@@ -1832,9 +1853,8 @@ function traceMethodFlow(input: {
     const text = compactLine(raw);
     if (!text) continue;
     if (lineNo === input.method.line) continue;
-    for (const local of localVariablesFromLine(raw)) {
-      receiverTypes.set(local.name, local.typeName);
-    }
+    for (const local of localVariablesFromLine(raw)) receiverTypes.set(local.name, local.typeName);
+    for (const lv of fact.astLocalVarsByLine.get(lineNo) ?? []) receiverTypes.set(lv.name, lv.type);
     const callback = callbacksByLine.get(lineNo);
     const logicStep = logicStepFromLine(raw, text, input.method.file, lineNo, input.depth + 1, input.steps.length + 1);
     if (logicStep) input.steps.push(logicStep);
